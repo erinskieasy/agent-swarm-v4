@@ -26,7 +26,7 @@ export async function chatCompletion(
         model,
         messages,
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: 4000,
     });
 
     return response.choices[0]?.message?.content ?? '';
@@ -46,7 +46,7 @@ export async function chatCompletionJSON<T>(
         model,
         messages,
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: 4000,
         response_format: { type: 'json_object' },
     });
 
