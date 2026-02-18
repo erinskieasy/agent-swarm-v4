@@ -48,7 +48,7 @@ const MissionBar: React.FC<MissionBarProps> = ({ goal, status, elapsed, agents, 
                                 title={goal || undefined}
                                 style={{ cursor: goal ? 'pointer' : 'default' }}
                             >
-                                {goal || 'No active mission'}
+                                {goal ? (goal.length > 100 ? goal.slice(0, 100) + '...' : goal) : 'No active mission'}
                             </span>
                         </div>
                         <div className={`status-badge ${config.badgeClass}`}>
