@@ -25,7 +25,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
     const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
     const [activeTab, setActiveTab] = useState<'instructions' | 'output'>('instructions');
 
-    // Layout nodes
+    // Layout nodes — multi-column by wave
     const nodes = useMemo(() => {
         const result: Array<{
             id: string;
@@ -40,6 +40,8 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             y: number;
             type: 'orchestrator' | 'agent' | 'merge' | 'output';
             statusText?: string;
+            wave?: number;
+            dependsOn?: string[];
         }> = [];
 
         // Always show orchestrator node
@@ -53,43 +55,59 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             color: 'var(--color-surface-light)',
             status: orchestratorStep?.status || 'pending',
             progress: orchestratorStep?.status === 'completed' ? 100 : orchestratorStep?.status === 'active' ? 50 : 0,
-            x: 12,
+            x: 8,
             y: 50,
             type: 'orchestrator',
         });
 
-        // Agent nodes
-        const agentCount = agents.length || 3;
-        const agentSpacing = 70 / (agentCount + 1);
+        // Compute waves from agent data
+        const maxWave = agents.length > 0 ? Math.max(0, ...agents.map(a => a.wave || 0)) : 0;
+        const totalWaves = maxWave + 1;
+
+        // X positions: orchestrator=8, waves spread across 20-72, merge=88
+        const getWaveX = (wave: number) => {
+            if (totalWaves === 1) return 45; // Single wave — centered
+            return 22 + (wave / (totalWaves - 1)) * 48; // Spread from 22% to 70%
+        };
 
         if (agents.length > 0) {
-            agents.forEach((agent, i) => {
-                const yPos = 15 + agentSpacing * (i + 1);
-                result.push({
-                    id: agent.id,
-                    label: agent.name?.replace(' Agent', '') || agent.role,
-                    role: agent.role,
-                    roleName: agent.name?.replace(' Agent', '') || agent.role,
-                    icon: getIconForRole(agent.role),
-                    color: agent.color,
-                    status: agent.status,
-                    progress: agent.progress,
-                    x: 45,
-                    y: yPos,
-                    type: 'agent',
-                    statusText: agent.status === 'active' ?
-                        `Processing... ${agent.progress}%` :
-                        agent.status === 'waiting' ? 'Waiting for data...' :
-                            agent.status === 'completed' ? 'Done' : undefined,
+            // Group agents by wave
+            for (let wave = 0; wave <= maxWave; wave++) {
+                const waveAgents = agents.filter(a => (a.wave || 0) === wave);
+                const waveSpacing = 70 / (waveAgents.length + 1);
+                const waveX = getWaveX(wave);
+
+                waveAgents.forEach((agent, i) => {
+                    const yPos = 15 + waveSpacing * (i + 1);
+                    result.push({
+                        id: agent.id,
+                        label: agent.name?.replace(' Agent', '') || agent.role,
+                        role: agent.role,
+                        roleName: agent.name?.replace(' Agent', '') || agent.role,
+                        icon: getIconForRole(agent.role),
+                        color: agent.color,
+                        status: agent.status,
+                        progress: agent.progress,
+                        x: waveX,
+                        y: yPos,
+                        type: 'agent',
+                        wave: agent.wave || 0,
+                        dependsOn: agent.dependsOn || [],
+                        statusText: agent.status === 'active' ?
+                            `Processing... ${agent.progress}%` :
+                            agent.status === 'waiting' ? 'Waiting for dependencies...' :
+                                agent.status === 'completed' ? 'Done' : undefined,
+                    });
                 });
-            });
+            }
         } else {
             // Placeholder agents when no mission
             const placeholders = [
-                { name: 'Researcher', role: 'researcher', color: 'var(--color-accent)' },
-                { name: 'Writer', role: 'writer', color: 'var(--color-secondary)' },
-                { name: 'Reviewer', role: 'reviewer', color: 'var(--color-primary)' },
+                { name: 'Research', role: 'researcher', color: 'var(--color-accent)' },
+                { name: 'Analyze', role: 'analyst', color: 'var(--color-secondary)' },
+                { name: 'Write', role: 'writer', color: 'var(--color-primary)' },
             ];
+            const phSpacing = 70 / (placeholders.length + 1);
             placeholders.forEach((ph, i) => {
                 result.push({
                     id: `placeholder-${i}`,
@@ -101,7 +119,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                     status: 'idle',
                     progress: 0,
                     x: 45,
-                    y: 15 + agentSpacing * (i + 1),
+                    y: 15 + phSpacing * (i + 1),
                     type: 'agent',
                 });
             });
@@ -118,7 +136,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             color: 'var(--color-success)',
             status: mergeStep?.status || 'pending',
             progress: mergeStep?.status === 'completed' ? 100 : 0,
-            x: 78,
+            x: 88,
             y: 50,
             type: 'merge',
         });
@@ -126,7 +144,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
         return result;
     }, [agents, steps]);
 
-    // Generate SVG connection paths
+    // Generate SVG connection paths — dependency-aware
     const connections = useMemo(() => {
         const lines: Array<{
             key: string;
@@ -140,11 +158,18 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
         const agentNodes = nodes.filter(n => n.type === 'agent');
         const mergeNode = nodes.find(n => n.type === 'merge');
 
+        // Find Wave 0 agents (connect from orchestrator)
+        const wave0Agents = agentNodes.filter(n => (n.wave || 0) === 0);
+        // Find agents in the last wave (connect to merge)
+        const maxWaveNum = agentNodes.length > 0 ? Math.max(...agentNodes.map(n => n.wave || 0)) : 0;
+        const lastWaveAgents = agentNodes.filter(n => (n.wave || 0) === maxWaveNum);
+
+        // Orchestrator → Wave 0 agents
         if (orchestratorNode) {
-            agentNodes.forEach((agent, i) => {
+            wave0Agents.forEach((agent, i) => {
                 lines.push({
                     key: `orch-${i}`,
-                    x1: orchestratorNode.x + 12,
+                    x1: orchestratorNode.x + 8,
                     y1: orchestratorNode.y,
                     x2: agent.x - 2,
                     y2: agent.y,
@@ -154,11 +179,36 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             });
         }
 
+        // Dependency arrows: source agent → dependent agent
+        agentNodes.forEach((agent) => {
+            if (agent.dependsOn?.length) {
+                agent.dependsOn.forEach((depRole) => {
+                    const sourceNode = agentNodes.find(n => {
+                        // Match by role — look at the original agent data
+                        const matchingAgent = agents.find(a => a.id === n.id);
+                        return matchingAgent?.role === depRole;
+                    });
+                    if (sourceNode) {
+                        lines.push({
+                            key: `dep-${sourceNode.id}-${agent.id}`,
+                            x1: sourceNode.x + 12,
+                            y1: sourceNode.y,
+                            x2: agent.x - 2,
+                            y2: agent.y,
+                            color: sourceNode.color,
+                            active: sourceNode.status === 'completed',
+                        });
+                    }
+                });
+            }
+        });
+
+        // Last wave agents → Merge
         if (mergeNode) {
-            agentNodes.forEach((agent, i) => {
+            lastWaveAgents.forEach((agent, i) => {
                 lines.push({
                     key: `agent-merge-${i}`,
-                    x1: agent.x + 15,
+                    x1: agent.x + 12,
                     y1: agent.y,
                     x2: mergeNode.x - 2,
                     y2: mergeNode.y,
@@ -169,7 +219,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
         }
 
         return lines;
-    }, [nodes]);
+    }, [nodes, agents]);
 
     const getBorderStyle = (node: typeof nodes[0]) => {
         if (node.status === 'active') return `2px solid ${node.color}`;

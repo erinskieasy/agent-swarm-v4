@@ -22,6 +22,18 @@ Analyze the complexity of the goal and choose the RIGHT number of agents:
 - Moderate goals (multi-faceted topics, research + writing): 3-5 agents
 - Complex goals (strategies, technical builds, deep analysis): 5-8 agents
 
+AGENT DEPENDENCIES (dependsOn):
+Agents can depend on the output of other agents. Use the "dependsOn" field to list the role IDs of agents whose output this agent needs as context.
+- Agents with NO dependencies (or dependsOn: []) run first (Wave 1), in parallel.
+- Agents that depend on Wave 1 agents run next (Wave 2), after receiving Wave 1 outputs.
+- This creates an execution pipeline: Wave 1 → Wave 2 → Wave 3...
+- Use dependencies when an agent genuinely benefits from another's output. NOT every agent needs dependencies.
+
+Example pipeline:
+- market_researcher (dependsOn: []) → runs in Wave 1
+- competitor_analyst (dependsOn: []) → runs in Wave 1 (parallel with above)
+- strategy_writer (dependsOn: ["market_researcher", "competitor_analyst"]) → runs in Wave 2, receives both outputs
+
 For each agent, provide ALL of the following fields:
 - role: a unique snake_case identifier (e.g., market_analyst, ux_researcher, backend_architect)
 - name: a human-readable display name (e.g., "Market Analysis Agent")
@@ -29,22 +41,34 @@ For each agent, provide ALL of the following fields:
 - color: a hex color for the UI (pick from this palette for visual variety: #0ea5e9, #6366f1, #f59e0b, #10b981, #ec4899, #8b5cf6, #14b8a6, #f97316, #06b6d4, #ef4444). Use DISTINCT colors for each agent.
 - icon: a Google Material Symbols icon name (e.g., search, analytics, code, palette, edit_note, fact_check, query_stats, psychology, target, bug_report, school, science, gavel, trending_up, description)
 - description: a one-line summary of what this agent will do
-- prompt: detailed, mission-specific instructions. Include ALL relevant context from the user's goal that this agent needs. Be thorough — the agent has no other context.
+- prompt: detailed, mission-specific instructions. Include ALL relevant context from the user's goal that this agent needs. Be thorough — the agent has no other context besides what you write here (plus any dependency outputs injected at runtime).
+- dependsOn: an array of role IDs this agent depends on (empty array [] if none)
 
 Respond in JSON format:
 {
   "subtasks": [
     {
-      "role": "market_analyst",
-      "name": "Market Analysis Agent",
-      "systemPrompt": "You are a market research specialist with expertise in competitive analysis...",
-      "color": "#f59e0b",
-      "icon": "analytics",
-      "description": "Analyze the target market landscape",
-      "prompt": "Research and analyze the market for... Focus on: 1) Market size 2) Key players..."
+      "role": "market_researcher",
+      "name": "Market Research Agent",
+      "systemPrompt": "You are a market research specialist...",
+      "color": "#0ea5e9",
+      "icon": "search",
+      "description": "Research the target market",
+      "prompt": "Research the market for...",
+      "dependsOn": []
+    },
+    {
+      "role": "strategy_writer",
+      "name": "Strategy Agent",
+      "systemPrompt": "You are a strategic planning expert...",
+      "color": "#10b981",
+      "icon": "target",
+      "description": "Write strategy based on research",
+      "prompt": "Using the research provided, draft a comprehensive strategy...",
+      "dependsOn": ["market_researcher"]
     }
   ],
-  "reasoning": "explain why you created these specific agents and how they complement each other"
+  "reasoning": "explain why you created these agents, their dependencies, and execution order"
 }`;
 
 interface PlanResult {
@@ -56,8 +80,45 @@ interface PlanResult {
         icon?: string;
         description: string;
         prompt: string;
+        dependsOn?: string[];
     }>;
     reasoning: string;
+}
+
+// Compute execution waves from dependency graph
+function computeWaves(subtasks: PlanResult['subtasks']): Map<string, number> {
+    const waveMap = new Map<string, number>();
+    const roleSet = new Set(subtasks.map(t => t.role));
+
+    // Iteratively assign waves
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const task of subtasks) {
+            if (waveMap.has(task.role)) continue;
+
+            const deps = (task.dependsOn || []).filter(d => roleSet.has(d));
+            if (deps.length === 0) {
+                // No dependencies — Wave 0
+                waveMap.set(task.role, 0);
+                changed = true;
+            } else if (deps.every(d => waveMap.has(d))) {
+                // All dependencies resolved — wave = max(dep waves) + 1
+                const maxDepWave = Math.max(...deps.map(d => waveMap.get(d)!));
+                waveMap.set(task.role, maxDepWave + 1);
+                changed = true;
+            }
+        }
+    }
+
+    // Fallback: any unresolved agents (circular deps) go to wave 0
+    for (const task of subtasks) {
+        if (!waveMap.has(task.role)) {
+            waveMap.set(task.role, 0);
+        }
+    }
+
+    return waveMap;
 }
 
 // Utility to pause execution
@@ -103,20 +164,37 @@ export async function runMission(missionId: string, goal: string): Promise<void>
         broadcast(missionId, 'mission-update', { id: missionId, status: 'executing' });
 
         const subtasks = plan.subtasks || [];
-        const agentRecords = [];
+        const waveMap = computeWaves(subtasks);
+        const totalWaves = Math.max(0, ...Array.from(waveMap.values())) + 1;
+        const agentRecords: Array<{ agent: any; task: typeof subtasks[0]; idx: number }> = [];
+
+        await addReasoning(missionId, null, 'Orchestrator', 'orchestrator',
+            `Execution pipeline: ${totalWaves} wave${totalWaves > 1 ? 's' : ''} — ${subtasks.map(t => `${t.name || t.role} (Wave ${(waveMap.get(t.role) || 0) + 1}${t.dependsOn?.length ? `, depends on: ${t.dependsOn.join(', ')}` : ''})`).join(', ')}`
+        );
 
         // Create agent records in DB — fully dynamic, AI-generated configs
         for (let i = 0; i < subtasks.length; i++) {
             const task = subtasks[i];
+            const wave = waveMap.get(task.role) || 0;
             const agent = await createAgent(missionId, {
                 name: task.name || `Agent ${i + 1}`,
                 role: task.role,
                 systemPrompt: task.systemPrompt || `You are a specialist agent. Complete the assigned task thoroughly and professionally.`,
                 color: task.color || AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
                 taskPrompt: task.prompt,
+                wave,
+                dependsOn: task.dependsOn || [],
             });
-            agentRecords.push({ agent, task });
-            broadcast(missionId, 'agent-update', { ...agent, status: 'idle', taskPrompt: task.prompt });
+            // Set later-wave agents to 'waiting' status initially
+            const initialStatus = wave === 0 ? 'idle' : 'waiting';
+            if (wave > 0) {
+                await updateAgentStatus(agent.id, missionId, 'waiting', 0);
+            }
+            agentRecords.push({ agent, task, idx: i });
+            broadcast(missionId, 'agent-update', {
+                ...agent, status: initialStatus, taskPrompt: task.prompt,
+                wave, dependsOn: task.dependsOn || [],
+            });
         }
 
         // Create execute steps for each agent
@@ -137,80 +215,109 @@ export async function runMission(missionId: string, goal: string): Promise<void>
         const webSearchTool = await registerTool(missionId, null, 'Web Search');
         const dataAnalysisTool = await registerTool(missionId, null, 'Data Analysis');
 
-        // ── Phase 4: Execute Agents Concurrently (with retry) ─────
+        // ── Phase 4: Wave-Based Execution ───────────────────────────
         const MAX_RETRIES = 3;
         const agentResults: Array<{ agentName: string; role: string; result: string; retries: number }> = [];
         const agentFailures: Array<{ agentName: string; role: string; error: string; retries: number }> = [];
 
-        const agentPromises = agentRecords.map(async ({ agent, task }, idx) => {
-            // Mark agent as active
-            await updateAgentStatus(agent.id, missionId, 'active', 10);
-            broadcast(missionId, 'step-update', { ...executeSteps[idx], status: 'active' });
+        // Execute wave by wave
+        for (let wave = 0; wave < totalWaves; wave++) {
+            const waveAgents = agentRecords.filter(a => (waveMap.get(a.task.role) || 0) === wave);
 
-            await addReasoning(missionId, agent.id, agent.name, task.role as any,
-                `Starting work: ${task.description}`
-            );
-
-            // Simulate tool usage for research-oriented roles (keyword match for dynamic roles)
-            const researchKeywords = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
-            if (researchKeywords.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw))) {
-                await updateToolStatus(webSearchTool.id, missionId, 'active');
-                await sleep(800);
+            if (wave > 0) {
+                await addReasoning(missionId, null, 'Orchestrator', 'orchestrator',
+                    `⏭️ Starting Wave ${wave + 1}: ${waveAgents.map(a => a.agent.name).join(', ')}. Injecting outputs from earlier agents as context.`
+                );
+            } else {
+                await addReasoning(missionId, null, 'Orchestrator', 'orchestrator',
+                    `▶️ Starting Wave 1: ${waveAgents.map(a => a.agent.name).join(', ')} (running in parallel)`
+                );
             }
 
-            // Update progress incrementally
-            await updateAgentStatus(agent.id, missionId, 'active', 30);
-            await sleep(500);
-            await updateAgentStatus(agent.id, missionId, 'active', 60);
+            const wavePromises = waveAgents.map(async ({ agent, task, idx }) => {
+                // Mark agent as active
+                await updateAgentStatus(agent.id, missionId, 'active', 10);
+                broadcast(missionId, 'step-update', { ...executeSteps[idx], status: 'active' });
 
-            // Retry wrapper for the OpenAI call
-            let lastError = '';
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                try {
-                    const result = await chatCompletion(task.prompt, goal);
+                await addReasoning(missionId, agent.id, agent.name, task.role as any,
+                    `Starting work: ${task.description}${task.dependsOn?.length ? ` (using context from: ${task.dependsOn.join(', ')})` : ''}`
+                );
 
-                    // Check for suspiciously short output
-                    if (result.length < 50) {
-                        throw new Error(`Output too short (${result.length} chars) — likely malformed`);
-                    }
+                // Simulate tool usage for research-oriented roles (keyword match for dynamic roles)
+                const researchKeywords = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
+                if (researchKeywords.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw))) {
+                    await updateToolStatus(webSearchTool.id, missionId, 'active');
+                    await sleep(800);
+                }
 
-                    agentResults.push({ agentName: agent.name, role: task.role, result, retries: attempt - 1 });
+                // Build enriched prompt with dependency context
+                let enrichedPrompt = task.prompt;
+                if (task.dependsOn?.length) {
+                    const contextBlocks = task.dependsOn.map(depRole => {
+                        const depResult = agentResults.find(r => r.role === depRole);
+                        if (depResult) {
+                            return `--- Output from ${depResult.agentName} (${depRole}) ---\n${depResult.result}`;
+                        }
+                        return `--- ${depRole}: No output available (agent may have failed) ---`;
+                    });
+                    enrichedPrompt = `CONTEXT FROM EARLIER AGENTS:\n${contextBlocks.join('\n\n')}\n\n---\n\nYOUR TASK:\n${task.prompt}`;
+                }
 
-                    await updateAgentStatus(agent.id, missionId, 'active', 90);
-                    await addReasoning(missionId, agent.id, agent.name, task.role as any,
-                        `Completed successfully${attempt > 1 ? ` (after ${attempt - 1} retries)` : ''}. Generated ${result.length} characters.`
-                    );
+                // Update progress incrementally
+                await updateAgentStatus(agent.id, missionId, 'active', 30);
+                await sleep(500);
+                await updateAgentStatus(agent.id, missionId, 'active', 60);
 
-                    // Mark complete
-                    if (['researcher', 'analyst', 'data_scientist', 'domain_expert'].includes(task.role)) {
-                        await updateToolStatus(webSearchTool.id, missionId, 'completed');
-                    }
-                    await updateAgentStatus(agent.id, missionId, 'completed', 100);
-                    // Save agent output to DB and broadcast
-                    await db.update(schema.agents).set({ output: result }).where(eq(schema.agents.id, agent.id));
-                    broadcast(missionId, 'agent-update', { id: agent.id, output: result });
-                    await markStepComplete(executeSteps[idx].id, missionId);
-                    return; // Success — exit retry loop
-                } catch (err: any) {
-                    lastError = err.message || String(err);
-                    if (attempt < MAX_RETRIES) {
+                // Retry wrapper for the OpenAI call
+                let lastError = '';
+                for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+                    try {
+                        const result = await chatCompletion(enrichedPrompt, goal);
+
+                        // Check for suspiciously short output
+                        if (result.length < 50) {
+                            throw new Error(`Output too short (${result.length} chars) — likely malformed`);
+                        }
+
+                        agentResults.push({ agentName: agent.name, role: task.role, result, retries: attempt - 1 });
+
+                        await updateAgentStatus(agent.id, missionId, 'active', 90);
                         await addReasoning(missionId, agent.id, agent.name, task.role as any,
-                            `⚠️ Attempt ${attempt} failed: ${lastError}. Retrying (${attempt}/${MAX_RETRIES})...`
+                            `Completed successfully${attempt > 1 ? ` (after ${attempt - 1} retries)` : ''}. Generated ${result.length} characters.`
                         );
-                        await sleep(1000 * attempt); // Exponential backoff
+
+                        // Mark complete + save output
+                        const researchKeywordsCheck = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
+                        if (researchKeywordsCheck.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw))) {
+                            await updateToolStatus(webSearchTool.id, missionId, 'completed');
+                        }
+                        await updateAgentStatus(agent.id, missionId, 'completed', 100);
+                        await db.update(schema.agents).set({ output: result }).where(eq(schema.agents.id, agent.id));
+                        broadcast(missionId, 'agent-update', { id: agent.id, output: result });
+                        await markStepComplete(executeSteps[idx].id, missionId);
+                        return; // Success — exit retry loop
+                    } catch (err: any) {
+                        lastError = err.message || String(err);
+                        if (attempt < MAX_RETRIES) {
+                            await addReasoning(missionId, agent.id, agent.name, task.role as any,
+                                `⚠️ Attempt ${attempt} failed: ${lastError}. Retrying (${attempt}/${MAX_RETRIES})...`
+                            );
+                            await sleep(1000 * attempt); // Exponential backoff
+                        }
                     }
                 }
-            }
 
-            // All retries exhausted — mark as failed
-            agentFailures.push({ agentName: agent.name, role: task.role, error: lastError, retries: MAX_RETRIES });
-            await addReasoning(missionId, agent.id, agent.name, task.role as any,
-                `❌ Failed after ${MAX_RETRIES} attempts. Last error: ${lastError}`
-            );
-            await updateAgentStatus(agent.id, missionId, 'failed', 0);
-        });
+                // All retries exhausted — mark as failed
+                agentFailures.push({ agentName: agent.name, role: task.role, error: lastError, retries: MAX_RETRIES });
+                await addReasoning(missionId, agent.id, agent.name, task.role as any,
+                    `❌ Failed after ${MAX_RETRIES} attempts. Last error: ${lastError}`
+                );
+                await updateAgentStatus(agent.id, missionId, 'failed', 0);
+            });
 
-        await Promise.allSettled(agentPromises);
+            // Wait for all agents in this wave to finish before moving to next wave
+            await Promise.allSettled(wavePromises);
+        }
 
         // ── Post-Execution Report ────────────────────────────────
         const reportLines = [
@@ -311,7 +418,7 @@ async function markStepComplete(stepId: string, missionId: string) {
 
 async function createAgent(
     missionId: string,
-    config: { name: string; role: string; systemPrompt: string; color: string; taskPrompt?: string }
+    config: { name: string; role: string; systemPrompt: string; color: string; taskPrompt?: string; wave?: number; dependsOn?: string[] }
 ) {
     const [agent] = await db.insert(schema.agents).values({
         missionId,
@@ -322,6 +429,8 @@ async function createAgent(
         progress: 0,
         color: config.color,
         taskPrompt: config.taskPrompt || '',
+        wave: config.wave || 0,
+        dependsOn: config.dependsOn || [],
     }).returning();
     return agent;
 }

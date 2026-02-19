@@ -31,6 +31,8 @@ export const agents = pgTable('agents', {
     color: varchar('color', { length: 50 }).notNull().default('#6366f1'),
     taskPrompt: text('task_prompt').notNull().default(''),
     output: text('output').notNull().default(''),
+    wave: integer('wave').default(0).notNull(),
+    dependsOn: json('depends_on').$type<string[]>().notNull().default([]),
 });
 
 // ─── Steps ───────────────────────────────────────────────────

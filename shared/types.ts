@@ -25,6 +25,8 @@ export interface Agent {
     color: string;
     taskPrompt?: string;
     output?: string;
+    dependsOn?: string[];
+    wave?: number;
 }
 
 export interface Step {
