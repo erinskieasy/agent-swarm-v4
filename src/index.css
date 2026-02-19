@@ -1376,3 +1376,187 @@ body,
 .flex-1 {
   flex: 1;
 }
+
+/* ── Clickable Agent Nodes ──────────────────────────────────── */
+.flow-node--clickable:hover {
+  transform: translate(-50%, -50%) scale(1.04) !important;
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.3) !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* ── Agent Detail Popup ─────────────────────────────────────── */
+.agent-popup-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  animation: fadeIn 0.15s ease;
+}
+
+.agent-popup {
+  width: 560px;
+  max-width: 90%;
+  max-height: 80%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: 1px solid var(--color-surface-light);
+  border-radius: 16px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(99, 102, 241, 0.1);
+  overflow: hidden;
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.agent-popup__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--color-surface-light);
+}
+
+.agent-popup__title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.agent-popup__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.agent-popup__name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.agent-popup__role {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.agent-popup__close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.agent-popup__close:hover {
+  background: var(--color-surface-light);
+  color: var(--color-text);
+}
+
+.agent-popup__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--color-surface-light);
+}
+
+.agent-popup__tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.agent-popup__tab:hover {
+  color: var(--color-text);
+}
+
+.agent-popup__tab--active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+.agent-popup__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  min-height: 200px;
+  max-height: 400px;
+}
+
+.agent-popup__text {
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--color-text-secondary, #94a3b8);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.agent-popup__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-top: 1px solid var(--color-surface-light);
+  font-size: 13px;
+}
+
+.agent-popup__status {
+  font-weight: 500;
+}
+
+.agent-popup__status--completed {
+  color: var(--color-success, #10b981);
+}
+
+.agent-popup__status--active {
+  color: var(--color-accent, #6366f1);
+}
+
+.agent-popup__status--failed {
+  color: var(--color-error, #ef4444);
+}
+
+.agent-popup__status--idle,
+.agent-popup__status--waiting {
+  color: var(--color-text-muted);
+}
+
+.agent-popup__progress {
+  color: var(--color-text-muted);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+}

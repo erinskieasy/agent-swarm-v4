@@ -1,7 +1,7 @@
 // Shared types between client and server
 
 export type MissionStatus = 'idle' | 'planning' | 'executing' | 'completed' | 'failed';
-export type AgentRole = 'orchestrator' | 'researcher' | 'writer' | 'reviewer' | 'analyst';
+export type AgentRole = string; // Fully dynamic — AI generates custom role identifiers per mission
 export type AgentStatus = 'idle' | 'active' | 'completed' | 'failed' | 'waiting';
 export type StepType = 'understand' | 'plan' | 'execute' | 'merge' | 'output';
 export type StepStatus = 'pending' | 'active' | 'completed' | 'failed';
@@ -23,6 +23,8 @@ export interface Agent {
     status: AgentStatus;
     progress: number;
     color: string;
+    taskPrompt?: string;
+    output?: string;
 }
 
 export interface Step {

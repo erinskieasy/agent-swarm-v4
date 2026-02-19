@@ -29,6 +29,8 @@ export const agents = pgTable('agents', {
     status: varchar('status', { length: 50 }).notNull().default('idle'),
     progress: integer('progress').default(0).notNull(),
     color: varchar('color', { length: 50 }).notNull().default('#6366f1'),
+    taskPrompt: text('task_prompt').notNull().default(''),
+    output: text('output').notNull().default(''),
 });
 
 // ─── Steps ───────────────────────────────────────────────────

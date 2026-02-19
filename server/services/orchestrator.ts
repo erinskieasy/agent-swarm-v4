@@ -4,90 +4,56 @@ import { broadcast } from './sse.js';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 
-// Agent configuration per role — expanded specialist registry
-const AGENT_CONFIGS: Record<string, { name: string; color: string; systemPrompt: string }> = {
-    researcher: {
-        name: 'Research Agent',
-        color: '#0ea5e9',
-        systemPrompt: `You are a meticulous research agent. Your job is to research the given topic thoroughly.
-Provide well-sourced, factual information. Include specific data points, statistics, and cite sources when possible.
-Format your response clearly with sections and bullet points.`,
-    },
-    writer: {
-        name: 'Writer Agent',
-        color: '#6366f1',
-        systemPrompt: `You are a skilled writing agent. Your job is to take research findings and craft compelling, clear content.
-Write in a professional yet engaging tone. Structure the content logically with headers and sections.
-Focus on clarity and actionable recommendations.`,
-    },
-    reviewer: {
-        name: 'Review Agent',
-        color: '#195de6',
-        systemPrompt: `You are a critical review agent. Your job is to check the work of other agents for accuracy, completeness, and quality.
-Verify claims, identify gaps, and suggest improvements. Provide a confidence score for the overall output.
-Be constructive and specific in your feedback.`,
-    },
-    analyst: {
-        name: 'Analyst Agent',
-        color: '#f59e0b',
-        systemPrompt: `You are a sharp analytical agent. Your job is to examine data, trends, and patterns to extract actionable insights.
-Break down complex information into clear findings. Use frameworks, comparisons, and logical reasoning.
-Present your analysis with clear conclusions and supporting evidence.`,
-    },
-    strategist: {
-        name: 'Strategy Agent',
-        color: '#10b981',
-        systemPrompt: `You are a strategic planning agent. Your job is to develop comprehensive strategies, roadmaps, and action plans.
-Consider market dynamics, competitive landscape, risks, and opportunities.
-Provide clear, prioritized recommendations with timelines and success metrics.`,
-    },
-    developer: {
-        name: 'Developer Agent',
-        color: '#ec4899',
-        systemPrompt: `You are a technical development agent. Your job is to provide code solutions, architectural designs, and technical implementation guidance.
-Write clean, well-documented code. Consider best practices, scalability, and maintainability.
-Explain technical decisions clearly and provide working examples.`,
-    },
-    designer: {
-        name: 'Designer Agent',
-        color: '#8b5cf6',
-        systemPrompt: `You are a creative design agent. Your job is to conceptualize user experiences, visual designs, and creative solutions.
-Focus on usability, accessibility, and aesthetic appeal. Describe layouts, color schemes, and interaction patterns.
-Provide design rationale and consider user personas.`,
-    },
-    data_scientist: {
-        name: 'Data Science Agent',
-        color: '#14b8a6',
-        systemPrompt: `You are a data science agent. Your job is to analyze datasets, build models, and derive statistical insights.
-Apply appropriate statistical methods and ML techniques. Explain your methodology clearly.
-Present findings with confidence intervals and caveats about data limitations.`,
-    },
-    editor: {
-        name: 'Editor Agent',
-        color: '#f97316',
-        systemPrompt: `You are a professional editing agent. Your job is to refine, polish, and improve written content.
-Fix grammar, improve clarity, enhance flow, and ensure consistent tone.
-Maintain the original voice while elevating the quality. Provide specific suggestions.`,
-    },
-    domain_expert: {
-        name: 'Domain Expert Agent',
-        color: '#06b6d4',
-        systemPrompt: `You are a domain expert agent. Your job is to provide deep, specialized knowledge in the relevant field.
-Draw on industry best practices, regulatory requirements, and expert-level understanding.
-Provide authoritative guidance with nuanced context that only a specialist would know.`,
-    },
-    qa_tester: {
-        name: 'QA Tester Agent',
-        color: '#ef4444',
-        systemPrompt: `You are a quality assurance agent. Your job is to test, validate, and stress-test outputs for correctness and edge cases.
-Identify potential failures, inconsistencies, and edge cases. Create test scenarios.
-Provide a clear pass/fail assessment with detailed reasoning for each finding.`,
-    },
-};
+// Color palette for dynamically generated agents
+const AGENT_COLOR_PALETTE = [
+    '#0ea5e9', '#6366f1', '#f59e0b', '#10b981', '#ec4899',
+    '#8b5cf6', '#14b8a6', '#f97316', '#06b6d4', '#ef4444',
+    '#a855f7', '#22d3ee', '#84cc16', '#e11d48', '#7c3aed',
+];
+
+// Orchestrator system prompt — defines how the AI plans missions
+const ORCHESTRATOR_SYSTEM_PROMPT = `You are an AI orchestrator. Given a user's goal, decompose it into specialist sub-tasks.
+
+For each sub-task, you must CREATE a custom specialist agent tailored to that specific task.
+Do NOT use generic roles — invent the perfect specialist for each piece of work.
+
+Analyze the complexity of the goal and choose the RIGHT number of agents:
+- Simple goals (straightforward questions, single-topic): 2-3 agents
+- Moderate goals (multi-faceted topics, research + writing): 3-5 agents
+- Complex goals (strategies, technical builds, deep analysis): 5-8 agents
+
+For each agent, provide ALL of the following fields:
+- role: a unique snake_case identifier (e.g., market_analyst, ux_researcher, backend_architect)
+- name: a human-readable display name (e.g., "Market Analysis Agent")
+- systemPrompt: a 2-3 sentence prompt defining the agent's expertise, personality, and output format expectations. This is the agent's permanent identity — make it specific and authoritative.
+- color: a hex color for the UI (pick from this palette for visual variety: #0ea5e9, #6366f1, #f59e0b, #10b981, #ec4899, #8b5cf6, #14b8a6, #f97316, #06b6d4, #ef4444). Use DISTINCT colors for each agent.
+- icon: a Google Material Symbols icon name (e.g., search, analytics, code, palette, edit_note, fact_check, query_stats, psychology, target, bug_report, school, science, gavel, trending_up, description)
+- description: a one-line summary of what this agent will do
+- prompt: detailed, mission-specific instructions. Include ALL relevant context from the user's goal that this agent needs. Be thorough — the agent has no other context.
+
+Respond in JSON format:
+{
+  "subtasks": [
+    {
+      "role": "market_analyst",
+      "name": "Market Analysis Agent",
+      "systemPrompt": "You are a market research specialist with expertise in competitive analysis...",
+      "color": "#f59e0b",
+      "icon": "analytics",
+      "description": "Analyze the target market landscape",
+      "prompt": "Research and analyze the market for... Focus on: 1) Market size 2) Key players..."
+    }
+  ],
+  "reasoning": "explain why you created these specific agents and how they complement each other"
+}`;
 
 interface PlanResult {
     subtasks: Array<{
         role: string;
+        name?: string;
+        systemPrompt?: string;
+        color?: string;
+        icon?: string;
         description: string;
         prompt: string;
     }>;
@@ -120,28 +86,9 @@ export async function runMission(missionId: string, goal: string): Promise<void>
         await markStepComplete(understandStep.id, missionId);
         broadcast(missionId, 'step-update', { ...planStep, status: 'active' });
 
-        // Use OpenAI to decompose the goal into sub-tasks
-        const availableRoles = Object.keys(AGENT_CONFIGS).join(', ');
+        // Use OpenAI to decompose the goal into sub-tasks with fully dynamic agent definitions
         const plan = await chatCompletionJSON<PlanResult>(
-            `You are an AI orchestrator. Given a user's goal, decompose it into specialist sub-tasks.
-
-Analyze the complexity of the goal and choose the RIGHT number of agents:
-- Simple goals (straightforward questions, single-topic): 2-3 agents
-- Moderate goals (multi-faceted topics, research + writing): 3-5 agents  
-- Complex goals (strategies, technical builds, deep analysis): 5-8 agents
-
-Available specialist roles: ${availableRoles}
-
-Choose the most appropriate roles for the mission. You do NOT need to use all roles — only the ones that genuinely add value.
-
-Respond in JSON format:
-{
-  "subtasks": [
-    { "role": "researcher", "description": "short description", "prompt": "detailed prompt for the agent" },
-    { "role": "analyst", "description": "short description", "prompt": "detailed prompt for the agent" }
-  ],
-  "reasoning": "explain why you chose this decomposition and these specific roles"
-}`,
+            ORCHESTRATOR_SYSTEM_PROMPT,
             goal
         );
 
@@ -158,21 +105,22 @@ Respond in JSON format:
         const subtasks = plan.subtasks || [];
         const agentRecords = [];
 
-        // Create agent records in DB
-        for (const task of subtasks) {
-            const config = AGENT_CONFIGS[task.role] || AGENT_CONFIGS.researcher;
+        // Create agent records in DB — fully dynamic, AI-generated configs
+        for (let i = 0; i < subtasks.length; i++) {
+            const task = subtasks[i];
             const agent = await createAgent(missionId, {
-                name: config.name,
+                name: task.name || `Agent ${i + 1}`,
                 role: task.role,
-                systemPrompt: config.systemPrompt,
-                color: config.color,
+                systemPrompt: task.systemPrompt || `You are a specialist agent. Complete the assigned task thoroughly and professionally.`,
+                color: task.color || AGENT_COLOR_PALETTE[i % AGENT_COLOR_PALETTE.length],
+                taskPrompt: task.prompt,
             });
             agentRecords.push({ agent, task });
-            broadcast(missionId, 'agent-update', { ...agent, status: 'idle' });
+            broadcast(missionId, 'agent-update', { ...agent, status: 'idle', taskPrompt: task.prompt });
         }
 
         // Create execute steps for each agent
-        const executeSteps = [];
+        const executeSteps: any[] = [];
         for (let i = 0; i < agentRecords.length; i++) {
             const step = await createStep(
                 missionId,
@@ -203,8 +151,9 @@ Respond in JSON format:
                 `Starting work: ${task.description}`
             );
 
-            // Simulate tool usage for research-oriented roles
-            if (['researcher', 'analyst', 'data_scientist', 'domain_expert'].includes(task.role)) {
+            // Simulate tool usage for research-oriented roles (keyword match for dynamic roles)
+            const researchKeywords = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
+            if (researchKeywords.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw))) {
                 await updateToolStatus(webSearchTool.id, missionId, 'active');
                 await sleep(800);
             }
@@ -237,6 +186,9 @@ Respond in JSON format:
                         await updateToolStatus(webSearchTool.id, missionId, 'completed');
                     }
                     await updateAgentStatus(agent.id, missionId, 'completed', 100);
+                    // Save agent output to DB and broadcast
+                    await db.update(schema.agents).set({ output: result }).where(eq(schema.agents.id, agent.id));
+                    broadcast(missionId, 'agent-update', { id: agent.id, output: result });
                     await markStepComplete(executeSteps[idx].id, missionId);
                     return; // Success — exit retry loop
                 } catch (err: any) {
@@ -359,7 +311,7 @@ async function markStepComplete(stepId: string, missionId: string) {
 
 async function createAgent(
     missionId: string,
-    config: { name: string; role: string; systemPrompt: string; color: string }
+    config: { name: string; role: string; systemPrompt: string; color: string; taskPrompt?: string }
 ) {
     const [agent] = await db.insert(schema.agents).values({
         missionId,
@@ -369,6 +321,7 @@ async function createAgent(
         status: 'idle',
         progress: 0,
         color: config.color,
+        taskPrompt: config.taskPrompt || '',
     }).returning();
     return agent;
 }

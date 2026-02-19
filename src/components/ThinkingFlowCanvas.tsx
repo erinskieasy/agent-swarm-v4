@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { Agent, Step } from '../../shared/types';
 
 interface ThinkingFlowCanvasProps {
@@ -6,15 +6,25 @@ interface ThinkingFlowCanvasProps {
     steps: Step[];
 }
 
-const ROLE_ICONS: Record<string, string> = {
-    orchestrator: 'psychology',
-    researcher: 'search',
-    writer: 'edit_note',
-    reviewer: 'fact_check',
-    analyst: 'analytics',
+// Fallback icon mapping for known role keywords
+const getIconForRole = (role: string): string => {
+    if (role.includes('research') || role.includes('investigat')) return 'search';
+    if (role.includes('writ') || role.includes('content')) return 'edit_note';
+    if (role.includes('review') || role.includes('qa') || role.includes('test')) return 'fact_check';
+    if (role.includes('analy')) return 'analytics';
+    if (role.includes('strateg') || role.includes('plan')) return 'target';
+    if (role.includes('develop') || role.includes('code') || role.includes('engineer')) return 'code';
+    if (role.includes('design') || role.includes('ux') || role.includes('ui')) return 'palette';
+    if (role.includes('data') || role.includes('statist')) return 'query_stats';
+    if (role.includes('edit') || role.includes('polish')) return 'edit_document';
+    if (role.includes('expert') || role.includes('domain') || role.includes('specialist')) return 'school';
+    return 'smart_toy';
 };
 
 const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }) => {
+    const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
+    const [activeTab, setActiveTab] = useState<'instructions' | 'output'>('instructions');
+
     // Layout nodes
     const nodes = useMemo(() => {
         const result: Array<{
@@ -57,11 +67,10 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                 const yPos = 15 + agentSpacing * (i + 1);
                 result.push({
                     id: agent.id,
-                    label: agent.role === 'researcher' ? 'Scanning Market' :
-                        agent.role === 'writer' ? 'Draft Strategy' : 'Verify Output',
+                    label: agent.name?.replace(' Agent', '') || agent.role,
                     role: agent.role,
-                    roleName: agent.name.replace(' Agent', ''),
-                    icon: ROLE_ICONS[agent.role] || 'smart_toy',
+                    roleName: agent.name?.replace(' Agent', '') || agent.role,
+                    icon: getIconForRole(agent.role),
                     color: agent.color,
                     status: agent.status,
                     progress: agent.progress,
@@ -84,11 +93,10 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             placeholders.forEach((ph, i) => {
                 result.push({
                     id: `placeholder-${i}`,
-                    label: ph.role === 'researcher' ? 'Scanning Market' :
-                        ph.role === 'writer' ? 'Draft Strategy' : 'Verify Output',
+                    label: ph.name,
                     role: ph.role,
                     roleName: ph.name,
-                    icon: ROLE_ICONS[ph.role],
+                    icon: getIconForRole(ph.role),
                     color: ph.color,
                     status: 'idle',
                     progress: 0,
@@ -176,6 +184,47 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
         return 0.5;
     };
 
+    const handleNodeClick = (node: typeof nodes[0]) => {
+        // Orchestrator node — show synthetic agent with system prompt
+        if (node.type === 'orchestrator') {
+            setSelectedAgent({
+                id: 'orchestrator',
+                missionId: '',
+                name: 'Orchestrator',
+                role: 'orchestrator',
+                systemPrompt: 'The Orchestrator is the central brain of the AI Swarm. It receives your mission goal, analyzes its complexity, and dynamically creates custom specialist agents tailored to the task. Each agent is given a unique role, personality, and detailed instructions. The Orchestrator then coordinates their execution and merges results.',
+                status: 'completed',
+                progress: 100,
+                color: 'var(--color-surface-light)',
+            } as Agent);
+            setActiveTab('instructions');
+            return;
+        }
+        // Merge node — show synthetic agent
+        if (node.type === 'merge') {
+            setSelectedAgent({
+                id: 'merge',
+                missionId: '',
+                name: 'Synthesizer',
+                role: 'synthesizer',
+                systemPrompt: 'The Synthesizer agent receives the individual outputs from all specialist agents and merges them into a single, coherent final result. It resolves conflicts, removes redundancy, and creates a polished deliverable.',
+                status: node.status as any,
+                progress: node.progress,
+                color: 'var(--color-success)',
+            } as Agent);
+            setActiveTab('instructions');
+            return;
+        }
+        // Regular agent node
+        if (node.type === 'agent') {
+            const agent = agents.find(a => a.id === node.id);
+            if (agent) {
+                setSelectedAgent(agent);
+                setActiveTab('instructions');
+            }
+        }
+    };
+
     return (
         <main className="canvas">
             <div className="canvas__grid" />
@@ -217,7 +266,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                 {nodes.map((node) => (
                     <div
                         key={node.id}
-                        className={`flow-node ${node.status === 'active' ? 'flow-node--active' : ''} ${agents.length > 0 || node.type === 'orchestrator' || node.type === 'merge' ? 'node-appear' : ''}`}
+                        className={`flow-node ${node.status === 'active' ? 'flow-node--active' : ''} ${agents.length > 0 || node.type === 'orchestrator' || node.type === 'merge' ? 'node-appear' : ''} flow-node--clickable`}
                         style={{
                             position: 'absolute',
                             left: `${node.x}%`,
@@ -228,7 +277,9 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                             boxShadow: node.status === 'active' ? `0 0 15px ${node.color}40` : undefined,
                             filter: node.status === 'idle' || node.status === 'pending' ? 'grayscale(0.5)' : undefined,
                             minWidth: 190,
+                            cursor: 'pointer',
                         }}
+                        onClick={() => handleNodeClick(node)}
                     >
                         <div className="flow-node__header">
                             <div
@@ -273,6 +324,82 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                     </div>
                 ))}
             </div>
+
+            {/* Agent Detail Popup */}
+            {selectedAgent && (
+                <div className="agent-popup-overlay" onClick={() => setSelectedAgent(null)}>
+                    <div className="agent-popup" onClick={(e) => e.stopPropagation()}>
+                        <div className="agent-popup__header">
+                            <div className="agent-popup__title-row">
+                                <div
+                                    className="agent-popup__icon"
+                                    style={{ backgroundColor: `${selectedAgent.color}20`, color: selectedAgent.color }}
+                                >
+                                    <span className="material-symbols-outlined" style={{ fontSize: 22 }}>
+                                        {getIconForRole(selectedAgent.role)}
+                                    </span>
+                                </div>
+                                <div>
+                                    <h3 className="agent-popup__name">{selectedAgent.name}</h3>
+                                    <span className="agent-popup__role" style={{ color: selectedAgent.color }}>
+                                        {selectedAgent.role}
+                                    </span>
+                                </div>
+                            </div>
+                            <button className="agent-popup__close" onClick={() => setSelectedAgent(null)}>
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="agent-popup__tabs">
+                            <button
+                                className={`agent-popup__tab ${activeTab === 'instructions' ? 'agent-popup__tab--active' : ''}`}
+                                onClick={() => setActiveTab('instructions')}
+                            >
+                                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>description</span>
+                                Instructions
+                            </button>
+                            <button
+                                className={`agent-popup__tab ${activeTab === 'output' ? 'agent-popup__tab--active' : ''}`}
+                                onClick={() => setActiveTab('output')}
+                            >
+                                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>output</span>
+                                Output
+                            </button>
+                        </div>
+
+                        <div className="agent-popup__content">
+                            {activeTab === 'instructions' ? (
+                                <div className="agent-popup__text">
+                                    {selectedAgent.id === 'orchestrator' || selectedAgent.id === 'merge'
+                                        ? selectedAgent.systemPrompt
+                                        : selectedAgent.taskPrompt || selectedAgent.systemPrompt || 'No task instructions available.'}
+                                </div>
+                            ) : (
+                                <div className="agent-popup__text">
+                                    {selectedAgent.output || (
+                                        selectedAgent.status === 'active'
+                                            ? 'Agent is still working...'
+                                            : selectedAgent.status === 'failed'
+                                                ? 'Agent failed to produce output.'
+                                                : 'No output yet.'
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="agent-popup__footer">
+                            <span className={`agent-popup__status agent-popup__status--${selectedAgent.status}`}>
+                                {selectedAgent.status === 'completed' ? '✅ Completed' :
+                                    selectedAgent.status === 'active' ? '🔄 Running' :
+                                        selectedAgent.status === 'failed' ? '❌ Failed' :
+                                            '⏳ Pending'}
+                            </span>
+                            <span className="agent-popup__progress">{selectedAgent.progress}%</span>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Canvas Controls */}
             <div className="canvas__controls">
