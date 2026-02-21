@@ -23,7 +23,7 @@ const getIconForRole = (role: string): string => {
 
 const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }) => {
     const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-    const [activeTab, setActiveTab] = useState<'instructions' | 'output'>('instructions');
+    const [activeTab, setActiveTab] = useState<'instructions' | 'output' | 'fullPrompt'>('instructions');
 
     // Layout nodes — multi-column by wave
     const nodes = useMemo(() => {
@@ -60,8 +60,9 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             type: 'orchestrator',
         });
 
-        // Compute waves from agent data
-        const maxWave = agents.length > 0 ? Math.max(0, ...agents.map(a => a.wave || 0)) : 0;
+        // Compute waves from agent data (filter out metadata agents)
+        const visibleAgents = agents.filter(a => !a.id.startsWith('__'));
+        const maxWave = visibleAgents.length > 0 ? Math.max(0, ...visibleAgents.map(a => a.wave || 0)) : 0;
         const totalWaves = maxWave + 1;
 
         // X positions: orchestrator=8, waves spread across 20-72, merge=88
@@ -70,10 +71,10 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
             return 22 + (wave / (totalWaves - 1)) * 48; // Spread from 22% to 70%
         };
 
-        if (agents.length > 0) {
+        if (visibleAgents.length > 0) {
             // Group agents by wave
             for (let wave = 0; wave <= maxWave; wave++) {
-                const waveAgents = agents.filter(a => (a.wave || 0) === wave);
+                const waveAgents = visibleAgents.filter(a => (a.wave || 0) === wave);
                 const waveSpacing = 70 / (waveAgents.length + 1);
                 const waveX = getWaveX(wave);
 
@@ -235,32 +236,38 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
     };
 
     const handleNodeClick = (node: typeof nodes[0]) => {
-        // Orchestrator node — show synthetic agent with system prompt
+        // Orchestrator node — show real prompt data if available
         if (node.type === 'orchestrator') {
+            const orchData = agents.find(a => a.id === '__orchestrator__');
             setSelectedAgent({
                 id: 'orchestrator',
                 missionId: '',
                 name: 'Orchestrator',
                 role: 'orchestrator',
-                systemPrompt: 'The Orchestrator is the central brain of the AI Swarm. It receives your mission goal, analyzes its complexity, and dynamically creates custom specialist agents tailored to the task. Each agent is given a unique role, personality, and detailed instructions. The Orchestrator then coordinates their execution and merges results.',
+                systemPrompt: orchData?.systemPrompt || 'The Orchestrator analyzes the mission goal and creates specialist agents.',
                 status: 'completed',
                 progress: 100,
                 color: 'var(--color-surface-light)',
+                finalPrompt: orchData?.finalPrompt || 'Orchestrator has not run yet.',
+                output: orchData?.output || 'No plan output yet.',
             } as Agent);
             setActiveTab('instructions');
             return;
         }
-        // Merge node — show synthetic agent
+        // Merge node — show real prompt data if available
         if (node.type === 'merge') {
+            const mergeData = agents.find(a => a.id === '__merge__');
             setSelectedAgent({
                 id: 'merge',
                 missionId: '',
                 name: 'Synthesizer',
                 role: 'synthesizer',
-                systemPrompt: 'The Synthesizer agent receives the individual outputs from all specialist agents and merges them into a single, coherent final result. It resolves conflicts, removes redundancy, and creates a polished deliverable.',
+                systemPrompt: mergeData?.systemPrompt || 'The Synthesizer merges agent outputs into a unified result.',
                 status: node.status as any,
                 progress: node.progress,
                 color: 'var(--color-success)',
+                finalPrompt: mergeData?.finalPrompt || 'Synthesizer has not run yet.',
+                output: mergeData?.output || 'No merged output yet.',
             } as Agent);
             setActiveTab('instructions');
             return;
@@ -416,6 +423,13 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                                 <span className="material-symbols-outlined" style={{ fontSize: 16 }}>output</span>
                                 Output
                             </button>
+                            <button
+                                className={`agent-popup__tab ${activeTab === 'fullPrompt' ? 'agent-popup__tab--active' : ''}`}
+                                onClick={() => setActiveTab('fullPrompt')}
+                            >
+                                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>send</span>
+                                Sent to AI
+                            </button>
                         </div>
 
                         <div className="agent-popup__content">
@@ -425,7 +439,7 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                                         ? selectedAgent.systemPrompt
                                         : selectedAgent.taskPrompt || selectedAgent.systemPrompt || 'No task instructions available.'}
                                 </div>
-                            ) : (
+                            ) : activeTab === 'output' ? (
                                 <div className="agent-popup__text">
                                     {selectedAgent.output || (
                                         selectedAgent.status === 'active'
@@ -433,6 +447,16 @@ const ThinkingFlowCanvas: React.FC<ThinkingFlowCanvasProps> = ({ agents, steps }
                                             : selectedAgent.status === 'failed'
                                                 ? 'Agent failed to produce output.'
                                                 : 'No output yet.'
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="agent-popup__text">
+                                    {selectedAgent.finalPrompt || (
+                                        selectedAgent.status === 'waiting'
+                                            ? 'Prompt will be assembled when dependencies complete.'
+                                            : selectedAgent.status === 'idle'
+                                                ? 'Agent has not started yet.'
+                                                : 'No prompt data available.'
                                     )}
                                 </div>
                             )}

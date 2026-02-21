@@ -157,6 +157,16 @@ export async function runMission(missionId: string, goal: string): Promise<void>
             plan.reasoning || `Decomposed the mission into ${plan.subtasks?.length || 0} specialist sub-tasks.`
         );
 
+        // Broadcast orchestrator's full prompt for transparency (what was sent to OpenAI)
+        broadcast(missionId, 'agent-update', {
+            id: '__orchestrator__',
+            name: 'Orchestrator',
+            role: 'orchestrator',
+            systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+            finalPrompt: `SYSTEM MESSAGE (sent to OpenAI):\n${ORCHESTRATOR_SYSTEM_PROMPT}\n\n─────────────────────────────\n\nUSER MESSAGE:\n${goal}`,
+            output: JSON.stringify(plan, null, 2),
+        });
+
         await markStepComplete(planStep.id, missionId);
 
         // ── Phase 3: Spawn Agents ────────────────────────────────
@@ -268,6 +278,10 @@ export async function runMission(missionId: string, goal: string): Promise<void>
                 await sleep(500);
                 await updateAgentStatus(agent.id, missionId, 'active', 60);
 
+                // Save the full prompt that will be sent to OpenAI (for transparency)
+                await db.update(schema.agents).set({ finalPrompt: enrichedPrompt }).where(eq(schema.agents.id, agent.id));
+                broadcast(missionId, 'agent-update', { id: agent.id, finalPrompt: enrichedPrompt });
+
                 // Retry wrapper for the OpenAI call
                 let lastError = '';
                 for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -340,12 +354,22 @@ export async function runMission(missionId: string, goal: string): Promise<void>
             `All agents completed. Merging ${agentResults.length} successful outputs into a cohesive final answer...`
         );
 
-        const mergedContent = await chatCompletion(
-            `You are a synthesis agent. Combine the following agent outputs into one cohesive, well-structured final answer.
+        const mergeSystemPrompt = `You are a synthesis agent. Combine the following agent outputs into one cohesive, well-structured final answer.
 Maintain the best insights from each contribution. Format with clear sections, headers, and actionable points.
-Do NOT mention that you are combining outputs — present it as one unified response.`,
-            `Original Goal: ${goal}\n\n${agentResults.map((r, i) => `--- ${r.agentName} (${r.role}) Output ---\n${r.result}`).join('\n\n')}`
-        );
+Do NOT mention that you are combining outputs — present it as one unified response.`;
+        const mergeUserMessage = `Original Goal: ${goal}\n\n${agentResults.map((r, i) => `--- ${r.agentName} (${r.role}) Output ---\n${r.result}`).join('\n\n')}`;
+
+        const mergedContent = await chatCompletion(mergeSystemPrompt, mergeUserMessage);
+
+        // Broadcast merge/synthesizer's full prompt for transparency
+        broadcast(missionId, 'agent-update', {
+            id: '__merge__',
+            name: 'Synthesizer',
+            role: 'synthesizer',
+            systemPrompt: mergeSystemPrompt,
+            finalPrompt: `SYSTEM MESSAGE (sent to OpenAI):\n${mergeSystemPrompt}\n\n─────────────────────────────\n\nUSER MESSAGE:\n${mergeUserMessage}`,
+            output: mergedContent,
+        });
 
         await markStepComplete(mergeStep.id, missionId);
 

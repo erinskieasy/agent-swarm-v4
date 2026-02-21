@@ -1378,10 +1378,12 @@ body,
 }
 
 /* ── Clickable Agent Nodes ──────────────────────────────────── */
+.flow-node--clickable {
+  transition: box-shadow 0.15s ease;
+}
+
 .flow-node--clickable:hover {
-  transform: translate(-50%, -50%) scale(1.04) !important;
   box-shadow: 0 0 20px rgba(99, 102, 241, 0.3) !important;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 /* ── Agent Detail Popup ─────────────────────────────────────── */

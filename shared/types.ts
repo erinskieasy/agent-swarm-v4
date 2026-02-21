@@ -25,6 +25,7 @@ export interface Agent {
     color: string;
     taskPrompt?: string;
     output?: string;
+    finalPrompt?: string;
     dependsOn?: string[];
     wave?: number;
 }
