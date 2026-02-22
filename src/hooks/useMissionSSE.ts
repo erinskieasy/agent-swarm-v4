@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import type { Agent, Step, ReasoningLog, ToolUsed, MissionResult, MissionStatus } from '../../shared/types';
+import type { Agent, Step, ReasoningLog, ToolUsed, MissionResult, MissionStatus, InterpretationProposal } from '../../shared/types';
 
 interface SSECallbacks {
     onMissionUpdate: (data: { id: string; status: MissionStatus }) => void;
@@ -9,6 +9,8 @@ interface SSECallbacks {
     onToolUpdate: (data: Partial<ToolUsed>) => void;
     onResult: (data: MissionResult) => void;
     onError: (data: { message: string }) => void;
+    onInterpretationProposal?: (data: InterpretationProposal) => void;
+    onInterpretationStatus?: (data: { status: string; message: string }) => void;
 }
 
 export function useMissionSSE(
@@ -56,6 +58,14 @@ export function useMissionSSE(
             if (e instanceof MessageEvent) {
                 callbacksRef.current.onError(JSON.parse(e.data));
             }
+        });
+
+        eventSource.addEventListener('interpretation-proposal', (e) => {
+            callbacksRef.current.onInterpretationProposal?.(JSON.parse(e.data));
+        });
+
+        eventSource.addEventListener('interpretation-status', (e) => {
+            callbacksRef.current.onInterpretationStatus?.(JSON.parse(e.data));
         });
 
         eventSource.onerror = () => {

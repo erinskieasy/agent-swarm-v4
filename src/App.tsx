@@ -5,6 +5,7 @@ import ThinkingFlowCanvas from './components/ThinkingFlowCanvas';
 import ReasoningPanel from './components/ReasoningPanel';
 import ResultTray from './components/ResultTray';
 import MissionInput from './components/MissionInput';
+import InterpretationPanel from './components/InterpretationPanel';
 import { useMissionSSE } from './hooks/useMissionSSE';
 import { useElapsedTime } from './hooks/useElapsedTime';
 
@@ -16,6 +17,7 @@ import type {
     ToolUsed,
     MissionResult,
     MissionStatus,
+    InterpretationProposal,
 } from '../shared/types';
 
 function App() {
@@ -27,8 +29,12 @@ function App() {
     const [tools, setTools] = useState<ToolUsed[]>([]);
     const [result, setResult] = useState<MissionResult | null>(null);
     const [isLaunching, setIsLaunching] = useState(false);
+    const [interpretationProposal, setInterpretationProposal] = useState<InterpretationProposal | null>(null);
+    const [interpretationStatus, setInterpretationStatus] = useState('idle');
+    const [interpretationMessage, setInterpretationMessage] = useState('');
+    const [isInterpretationLoading, setIsInterpretationLoading] = useState(false);
 
-    const isRunning = mission?.status === 'planning' || mission?.status === 'executing';
+    const isRunning = mission?.status === 'planning' || mission?.status === 'executing' || mission?.status === 'interpreting';
     const { formatted: elapsed, reset: resetTimer } = useElapsedTime(isRunning);
 
     // ─── SSE Handlers ────────────────────────────────────────
@@ -78,6 +84,22 @@ function App() {
         console.error('Mission error:', data.message);
     }, []);
 
+    const handleInterpretationProposal = useCallback((data: InterpretationProposal) => {
+        setInterpretationProposal(data);
+        setIsInterpretationLoading(false);
+    }, []);
+
+    const handleInterpretationStatus = useCallback((data: { status: string; message: string }) => {
+        setInterpretationStatus(data.status);
+        setInterpretationMessage(data.message);
+        if (data.status === 'approved') {
+            // Interpretation approved — clear proposal, mission will transition to 'planning'
+            setInterpretationProposal(null);
+            setInterpretationStatus('idle');
+            setIsInterpretationLoading(false);
+        }
+    }, []);
+
     // ─── SSE Connection ─────────────────────────────────────
     useMissionSSE(mission?.id || null, {
         onMissionUpdate: handleMissionUpdate,
@@ -87,6 +109,8 @@ function App() {
         onToolUpdate: handleToolUpdate,
         onResult: handleResult,
         onError: handleError,
+        onInterpretationProposal: handleInterpretationProposal,
+        onInterpretationStatus: handleInterpretationStatus,
     });
 
     // ─── Launch Mission ──────────────────────────────────────
@@ -97,6 +121,10 @@ function App() {
         setReasoningLogs([]);
         setTools([]);
         setResult(null);
+        setInterpretationProposal(null);
+        setInterpretationStatus('idle');
+        setInterpretationMessage('');
+        setIsInterpretationLoading(false);
         resetTimer();
         setIsLaunching(true);
 
@@ -163,7 +191,41 @@ function App() {
         setReasoningLogs([]);
         setTools([]);
         setResult(null);
+        setInterpretationProposal(null);
+        setInterpretationStatus('idle');
+        setInterpretationMessage('');
+        setIsInterpretationLoading(false);
         resetTimer();
+    };
+
+    // ─── Interpretation Actions ──────────────────────────────
+    const handleApproveInterpretation = async () => {
+        if (!mission) return;
+        setIsInterpretationLoading(true);
+        try {
+            await fetch(`/api/missions/${mission.id}/interpret/approve`, {
+                method: 'POST',
+            });
+        } catch (error) {
+            console.error('Failed to approve interpretation:', error);
+            setIsInterpretationLoading(false);
+        }
+    };
+
+    const handleRefineInterpretation = async (feedback: string) => {
+        if (!mission) return;
+        setIsInterpretationLoading(true);
+        setInterpretationProposal(null); // Clear current proposal while refining
+        try {
+            await fetch(`/api/missions/${mission.id}/interpret/refine`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ feedback }),
+            });
+        } catch (error) {
+            console.error('Failed to refine interpretation:', error);
+            setIsInterpretationLoading(false);
+        }
     };
 
     // ─── Derived Data ────────────────────────────────────────
@@ -219,10 +281,21 @@ function App() {
                     memoryItems={memoryItems}
                     sourceCount={sourceCount}
                 />
-                <ThinkingFlowCanvas
-                    agents={agents}
-                    steps={steps}
-                />
+                {mission.status === 'interpreting' ? (
+                    <InterpretationPanel
+                        proposal={interpretationProposal}
+                        interpretationStatus={interpretationStatus}
+                        statusMessage={interpretationMessage}
+                        onApprove={handleApproveInterpretation}
+                        onRefine={handleRefineInterpretation}
+                        isLoading={isInterpretationLoading}
+                    />
+                ) : (
+                    <ThinkingFlowCanvas
+                        agents={agents}
+                        steps={steps}
+                    />
+                )}
                 <ReasoningPanel
                     logs={reasoningLogs}
                 />

@@ -11,6 +11,7 @@ interface MissionBarProps {
 
 const STATUS_CONFIG: Record<MissionStatus, { label: string; dotClass: string; badgeClass: string }> = {
     idle: { label: 'Idle', dotClass: '', badgeClass: 'status-badge--idle' },
+    interpreting: { label: 'Interpreting', dotClass: 'pulse-dot--accent', badgeClass: 'status-badge--executing' },
     planning: { label: 'Planning Phase', dotClass: 'pulse-dot--warning', badgeClass: 'status-badge--planning' },
     executing: { label: 'Executing', dotClass: 'pulse-dot--accent', badgeClass: 'status-badge--executing' },
     completed: { label: 'Completed', dotClass: 'pulse-dot--success', badgeClass: 'status-badge--completed' },

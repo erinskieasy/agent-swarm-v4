@@ -84,3 +84,27 @@ export const missionResults = pgTable('mission_results', {
     reasoningSummary: text('reasoning_summary').notNull().default(''),
     agentsInvolved: json('agents_involved').$type<string[]>().default([]),
 });
+
+// ─── Interpretations ─────────────────────────────────────────
+export const interpretations = pgTable('interpretations', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    missionId: uuid('mission_id')
+        .references(() => missions.id, { onDelete: 'cascade' })
+        .notNull(),
+    iteration: integer('iteration').notNull(),
+    rawGoal: text('raw_goal').notNull(),
+    refinedGoal: text('refined_goal').notNull().default(''),
+    interpretation: json('interpretation').$type<{
+        objective: string;
+        scope: string;
+        deliverables: string[];
+        audience: string;
+        assumptions: string[];
+    }>().notNull(),
+    weakPoints: json('weak_points').$type<string[]>().notNull().default([]),
+    clarifyingQuestions: json('clarifying_questions').$type<string[]>().notNull().default([]),
+    confidence: integer('confidence').notNull().default(0),
+    userFeedback: text('user_feedback'),
+    researchSources: json('research_sources').$type<Array<{ title: string; url: string; snippet: string; score: number }>>().notNull().default([]),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+});

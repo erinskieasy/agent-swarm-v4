@@ -1,6 +1,6 @@
 // Shared types between client and server
 
-export type MissionStatus = 'idle' | 'planning' | 'executing' | 'completed' | 'failed';
+export type MissionStatus = 'idle' | 'interpreting' | 'planning' | 'executing' | 'completed' | 'failed';
 export type AgentRole = string; // Fully dynamic — AI generates custom role identifiers per mission
 export type AgentStatus = 'idle' | 'active' | 'completed' | 'failed' | 'waiting';
 export type StepType = 'understand' | 'plan' | 'execute' | 'merge' | 'output';
@@ -69,6 +69,27 @@ export interface MissionResult {
     agentsInvolved: string[];
 }
 
+// ─── Interpretation Types ─────────────────────────────────────
+export interface InterpretationProposal {
+    id: string;
+    missionId: string;
+    iteration: number;
+    rawGoal: string;
+    refinedGoal: string;
+    interpretation: {
+        objective: string;
+        scope: string;
+        deliverables: string[];
+        audience: string;
+        assumptions: string[];
+    };
+    weakPoints: string[];
+    clarifyingQuestions: string[];
+    confidence: number;
+    userFeedback?: string | null;
+    researchSources: Array<{ title: string; url: string; snippet: string; score: number }>;
+}
+
 // SSE Event Types
 export type SSEEventType =
     | 'mission-update'
@@ -77,6 +98,8 @@ export type SSEEventType =
     | 'reasoning'
     | 'tool-update'
     | 'result'
+    | 'interpretation-proposal'
+    | 'interpretation-status'
     | 'error';
 
 export interface SSEEvent {

@@ -3,6 +3,7 @@ import { chatCompletion, chatCompletionJSON } from './openai.js';
 import { broadcast } from './sse.js';
 import { eq } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
+import { researchTopic } from './tavily.js';
 
 // Color palette for dynamically generated agents
 const AGENT_COLOR_PALETTE = [
@@ -253,13 +254,6 @@ export async function runMission(missionId: string, goal: string): Promise<void>
                     `Starting work: ${task.description}${task.dependsOn?.length ? ` (using context from: ${task.dependsOn.join(', ')})` : ''}`
                 );
 
-                // Simulate tool usage for research-oriented roles (keyword match for dynamic roles)
-                const researchKeywords = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
-                if (researchKeywords.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw))) {
-                    await updateToolStatus(webSearchTool.id, missionId, 'active');
-                    await sleep(800);
-                }
-
                 // Build enriched prompt with dependency context
                 let enrichedPrompt = task.prompt;
                 if (task.dependsOn?.length) {
@@ -271,6 +265,28 @@ export async function runMission(missionId: string, goal: string): Promise<void>
                         return `--- ${depRole}: No output available (agent may have failed) ---`;
                     });
                     enrichedPrompt = `CONTEXT FROM EARLIER AGENTS:\n${contextBlocks.join('\n\n')}\n\n---\n\nYOUR TASK:\n${task.prompt}`;
+                }
+
+                // Real web research for research-oriented roles
+                const researchKeywords = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
+                const isResearchRole = researchKeywords.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw));
+
+                if (isResearchRole) {
+                    await updateToolStatus(webSearchTool.id, missionId, 'active');
+                    try {
+                        const research = await researchTopic(task.prompt, { scope: goal });
+                        if (research.sources.length > 0) {
+                            const researchBlock = `\n\n--- WEB RESEARCH RESULTS ---\n${research.sources.map((s, i) => `${i + 1}. [${s.title}](${s.url})\n   ${s.snippet}`).join('\n\n')}`;
+                            enrichedPrompt = enrichedPrompt + researchBlock;
+                            await addReasoning(missionId, agent.id, agent.name, task.role as any,
+                                `🌐 Found ${research.sources.length} web sources to inform analysis.`
+                            );
+                        }
+                    } catch (err: any) {
+                        await addReasoning(missionId, agent.id, agent.name, task.role as any,
+                            `⚠️ Web research failed: ${err.message}. Proceeding with LLM knowledge only.`
+                        );
+                    }
                 }
 
                 // Update progress incrementally
@@ -301,8 +317,7 @@ export async function runMission(missionId: string, goal: string): Promise<void>
                         );
 
                         // Mark complete + save output
-                        const researchKeywordsCheck = ['research', 'analyst', 'data', 'expert', 'investigat', 'survey', 'audit'];
-                        if (researchKeywordsCheck.some(kw => task.role.includes(kw) || (task.name?.toLowerCase() || '').includes(kw))) {
+                        if (isResearchRole) {
                             await updateToolStatus(webSearchTool.id, missionId, 'completed');
                         }
                         await updateAgentStatus(agent.id, missionId, 'completed', 100);
