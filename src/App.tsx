@@ -228,6 +228,26 @@ function App() {
         }
     };
 
+    const handleFollowUp = async (question: string) => {
+        if (!mission) return;
+        // Reset UI to show interpretation pipeline again
+        setInterpretationProposal(null);
+        setInterpretationStatus('analyzing');
+        setInterpretationMessage('Processing follow-up...');
+        setIsInterpretationLoading(true);
+        setResult(null);
+        try {
+            await fetch(`/api/missions/${mission.id}/follow-up`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question }),
+            });
+        } catch (error) {
+            console.error('Failed to submit follow-up:', error);
+            setIsInterpretationLoading(false);
+        }
+    };
+
     // ─── Derived Data ────────────────────────────────────────
     const confidence = result
         ? 94
@@ -298,6 +318,8 @@ function App() {
                 )}
                 <ReasoningPanel
                     logs={reasoningLogs}
+                    missionStatus={mission.status}
+                    onFollowUp={handleFollowUp}
                 />
             </div>
             <ResultTray

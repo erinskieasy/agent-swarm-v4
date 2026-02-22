@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
-import { startInterpretation, refineInterpretation, approveInterpretation } from '../services/interpreter.js';
+import { startInterpretation, refineInterpretation, approveInterpretation, followUpInterpretation } from '../services/interpreter.js';
 
 const router = Router();
 
@@ -61,6 +61,26 @@ router.post('/:id/interpret/refine', async (req, res) => {
         res.json({ success: true });
     } catch (error: any) {
         console.error('Failed to refine interpretation:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Follow-up: re-enter interpretation loop with synthesized output + user question
+router.post('/:id/follow-up', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { question } = req.body;
+
+        if (!question || typeof question !== 'string') {
+            return res.status(400).json({ error: 'A follow-up question is required' });
+        }
+
+        followUpInterpretation(id, question).catch((err) => {
+            console.error(`Follow-up failed for mission ${id}:`, err);
+        });
+        res.json({ success: true });
+    } catch (error: any) {
+        console.error('Failed to process follow-up:', error);
         res.status(500).json({ error: error.message });
     }
 });

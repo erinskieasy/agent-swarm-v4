@@ -456,3 +456,71 @@ export async function approveInterpretation(missionId: string): Promise<void> {
     // Hand off to the orchestrator with the refined goal
     await runMission(missionId, latestProposal.refinedGoal);
 }
+
+/**
+ * Follow-up: takes the synthesized output from a completed mission
+ * and the user's follow-up question, then re-enters the interpretation loop
+ * with enriched context.
+ */
+export async function followUpInterpretation(missionId: string, followUpQuestion: string): Promise<void> {
+    try {
+        // Fetch the synthesized output
+        const results = await db.query.missionResults.findMany({
+            where: eq(schema.missionResults.missionId, missionId),
+        });
+        const latestResult = results[results.length - 1];
+
+        // Fetch the latest interpretation for context
+        const interpretations = await db.query.interpretations.findMany({
+            where: eq(schema.interpretations.missionId, missionId),
+            orderBy: (interp, { desc }) => [desc(interp.iteration)],
+            limit: 1,
+        });
+        const latestInterpretation = interpretations[0];
+
+        // Fetch the original mission goal
+        const mission = await db.query.missions.findFirst({
+            where: eq(schema.missions.id, missionId),
+        });
+
+        if (!mission) {
+            throw new Error('Mission not found');
+        }
+
+        // Construct enriched goal combining previous output + follow-up
+        const previousOutput = latestResult?.content || 'No previous output available.';
+        const originalGoal = mission.goal;
+
+        const enrichedGoal = `FOLLOW-UP REQUEST
+
+Original mission goal: ${originalGoal}
+
+Previous synthesized output (from completed agents):
+---
+${previousOutput}
+---
+
+User's follow-up question/request: ${followUpQuestion}
+
+Instructions: The user has reviewed the previous output above and is asking a follow-up question. Address their specific follow-up while building on the existing work. Do NOT start from scratch — enhance, expand, or refine the previous output based on their request.`;
+
+        // Reset mission status
+        await updateMissionStatus(missionId, 'interpreting');
+        broadcast(missionId, 'mission-update', { id: missionId, status: 'interpreting' });
+
+        await addReasoning(missionId, 'Interpreter', 'interpreter',
+            `🔄 Follow-up received: "${followUpQuestion.slice(0, 100)}${followUpQuestion.length > 100 ? '...' : ''}". Re-entering interpretation loop with context from previous output.`
+        );
+
+        // Re-enter interpretation using the same startInterpretation pipeline
+        // but with the enriched goal that includes previous context
+        await startInterpretation(missionId, enrichedGoal);
+    } catch (error: any) {
+        console.error(`Follow-up failed for mission ${missionId}:`, error);
+        await addReasoning(missionId, 'Interpreter', 'interpreter',
+            `❌ Follow-up failed: ${error.message}`
+        );
+        broadcast(missionId, 'interpretation-status', { status: 'error', message: error.message });
+    }
+}
+
