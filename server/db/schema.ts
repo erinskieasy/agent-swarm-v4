@@ -108,3 +108,35 @@ export const interpretations = pgTable('interpretations', {
     researchSources: json('research_sources').$type<Array<{ title: string; url: string; snippet: string; score: number }>>().notNull().default([]),
     createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// ─── Mission Documents ───────────────────────────────────────
+export const missionDocuments = pgTable('mission_documents', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    missionId: uuid('mission_id')
+        .references(() => missions.id, { onDelete: 'cascade' })
+        .notNull(),
+    filename: varchar('filename', { length: 512 }).notNull(),
+    mimeType: varchar('mime_type', { length: 100 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    status: varchar('status', { length: 50 }).notNull().default('processing'),
+    uploadedAt: timestamp('uploaded_at').defaultNow().notNull(),
+});
+
+// ─── Document Chunks ─────────────────────────────────────────
+export const documentChunks = pgTable('document_chunks', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+        .references(() => missionDocuments.id, { onDelete: 'cascade' })
+        .notNull(),
+    missionId: uuid('mission_id')
+        .references(() => missions.id, { onDelete: 'cascade' })
+        .notNull(),
+    chunkIndex: integer('chunk_index').notNull(),
+    content: text('content').notNull(),
+    metadata: json('metadata').$type<{
+        page?: number;
+        section?: string;
+        filename: string;
+    }>().notNull(),
+});
+

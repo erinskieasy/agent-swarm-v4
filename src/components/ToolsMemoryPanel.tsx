@@ -1,27 +1,95 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import type { ToolUsed } from '../../shared/types';
+
+export interface DocumentInfo {
+    id: string;
+    filename: string;
+    sizeBytes: number;
+    status: string;
+}
+
+export interface WebSearchSource {
+    title: string;
+    url: string;
+}
 
 interface ToolsMemoryPanelProps {
     tools: ToolUsed[];
     confidence: number;
     memoryItems: string[];
     sourceCount: number;
+    missionId: string | null;
+    documents: DocumentInfo[];
+    webSearchSources: WebSearchSource[];
+    onUploadFiles: (files: File[]) => void;
 }
 
-const TOOL_ICONS: Record<string, { icon: string; color: string }> = {
-    'Web Search': { icon: 'travel_explore', color: 'var(--color-accent)' },
-    'Data Analysis': { icon: 'table_chart', color: '#4ade80' },
-    'CRM Access': { icon: 'database', color: '#fb923c' },
-};
+const TOOL_CONFIGS: Array<{
+    key: string;
+    name: string;
+    icon: string;
+    color: string;
+}> = [
+        { key: 'file-search', name: 'File Search', icon: 'folder_open', color: '#4ade80' },
+        { key: 'web-search', name: 'Web Search', icon: 'travel_explore', color: 'var(--color-accent)' },
+    ];
+
+function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getDomain(url: string): string {
+    try {
+        return new URL(url).hostname.replace('www.', '');
+    } catch {
+        return url;
+    }
+}
 
 const ToolsMemoryPanel: React.FC<ToolsMemoryPanelProps> = ({
     tools,
     confidence,
     memoryItems,
     sourceCount,
+    missionId,
+    documents,
+    webSearchSources,
+    onUploadFiles,
 }) => {
+    const [expandedTool, setExpandedTool] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const circumference = 2 * Math.PI * 15.9155;
     const dashArray = `${(confidence / 100) * circumference}, ${circumference}`;
+
+    const toggleTool = (key: string) => {
+        setExpandedTool((prev) => (prev === key ? null : key));
+    };
+
+    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            onUploadFiles(Array.from(e.target.files));
+        }
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    };
+
+    // Determine tool activity status
+    const getToolStatus = (key: string): 'active' | 'idle' | 'has-data' => {
+        if (key === 'web-search') {
+            const hasActive = tools.some(t => t.toolName === 'Web Search' && t.status === 'active');
+            if (hasActive) return 'active';
+            return webSearchSources.length > 0 ? 'has-data' : 'idle';
+        }
+        if (key === 'file-search') {
+            const hasActive = tools.some(t => t.toolName === 'Data Analysis' && t.status === 'active');
+            if (hasActive) return 'active';
+            return documents.length > 0 ? 'has-data' : 'idle';
+        }
+        return 'idle';
+    };
 
     return (
         <aside className="sidebar">
@@ -57,55 +125,111 @@ const ToolsMemoryPanel: React.FC<ToolsMemoryPanelProps> = ({
                 </div>
             </div>
 
-            {/* Tools */}
+            {/* Tools — Interactive Accordion */}
             <div className="sidebar__section sidebar__section--bordered overflow-y-auto">
                 <h3 className="sidebar__heading">
                     Active Tools
-                    <span className="sidebar__badge">{tools.length}</span>
+                    <span className="sidebar__badge">{TOOL_CONFIGS.length}</span>
                 </h3>
-                <div>
-                    {tools.length === 0 ? (
-                        <>
-                            {/* Default tools when no mission is running */}
-                            <div className="tool-item">
-                                <span className="material-symbols-outlined" style={{ color: 'var(--color-accent)', fontSize: 18 }}>
-                                    travel_explore
-                                </span>
-                                <span>Web Search</span>
-                                <span className="tool-item__dot tool-item__dot--idle" />
-                            </div>
-                            <div className="tool-item">
-                                <span className="material-symbols-outlined" style={{ color: '#4ade80', fontSize: 18 }}>
-                                    table_chart
-                                </span>
-                                <span>Data Analysis</span>
-                                <span className="tool-item__dot tool-item__dot--idle" />
-                            </div>
-                            <div className="tool-item">
-                                <span className="material-symbols-outlined" style={{ color: '#fb923c', fontSize: 18 }}>
-                                    database
-                                </span>
-                                <span>CRM Access</span>
-                                <span className="tool-item__dot tool-item__dot--idle" />
-                            </div>
-                        </>
-                    ) : (
-                        tools.map((tool) => {
-                            const config = TOOL_ICONS[tool.toolName] || { icon: 'build', color: 'var(--color-text-dim)' };
-                            return (
-                                <div key={tool.id} className="tool-item">
-                                    <span className="material-symbols-outlined" style={{ color: config.color, fontSize: 18 }}>
-                                        {config.icon}
+                <div className="tool-accordion">
+                    {TOOL_CONFIGS.map((tool) => {
+                        const isExpanded = expandedTool === tool.key;
+                        const status = getToolStatus(tool.key);
+
+                        return (
+                            <div key={tool.key} className={`tool-accordion__item ${isExpanded ? 'tool-accordion__item--expanded' : ''}`}>
+                                <button
+                                    className="tool-accordion__header"
+                                    onClick={() => toggleTool(tool.key)}
+                                >
+                                    <span className="material-symbols-outlined" style={{ color: tool.color, fontSize: 18 }}>
+                                        {tool.icon}
                                     </span>
-                                    <span>{tool.toolName}</span>
-                                    <span className={`tool-item__dot ${tool.status === 'active' || tool.status === 'completed'
-                                            ? 'tool-item__dot--active'
-                                            : 'tool-item__dot--idle'
-                                        }`} />
-                                </div>
-                            );
-                        })
-                    )}
+                                    <span className="tool-accordion__name">{tool.name}</span>
+                                    <span className={`tool-item__dot tool-item__dot--${status === 'active' ? 'active' : status === 'has-data' ? 'active' : 'idle'}`} />
+                                    <span
+                                        className="material-symbols-outlined tool-accordion__chevron"
+                                        style={{ fontSize: 16, transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                                    >
+                                        expand_more
+                                    </span>
+                                </button>
+
+                                {/* Expanded content */}
+                                {isExpanded && (
+                                    <div className="tool-accordion__body">
+                                        {tool.key === 'web-search' && (
+                                            <>
+                                                {webSearchSources.length === 0 ? (
+                                                    <p className="tool-accordion__empty">No web searches yet.</p>
+                                                ) : (
+                                                    <div className="tool-accordion__list">
+                                                        {webSearchSources.map((source, i) => (
+                                                            <a
+                                                                key={i}
+                                                                className="web-source-item"
+                                                                href={source.url}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                            >
+                                                                <span className="material-symbols-outlined" style={{ fontSize: 14, color: 'var(--color-accent)' }}>
+                                                                    language
+                                                                </span>
+                                                                <span className="web-source-item__title">{source.title || getDomain(source.url)}</span>
+                                                                <span className="web-source-item__domain">{getDomain(source.url)}</span>
+                                                            </a>
+                                                        ))}
+                                                        <div className="tool-accordion__count">
+                                                            {webSearchSources.length} source{webSearchSources.length !== 1 ? 's' : ''}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+
+                                        {tool.key === 'file-search' && (
+                                            <>
+                                                {documents.length === 0 && (
+                                                    <p className="tool-accordion__empty">No documents uploaded.</p>
+                                                )}
+                                                {documents.length > 0 && (
+                                                    <div className="tool-accordion__list">
+                                                        {documents.map((doc) => (
+                                                            <div key={doc.id} className="doc-item">
+                                                                <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#4ade80' }}>
+                                                                    description
+                                                                </span>
+                                                                <span className="doc-item__name">{doc.filename}</span>
+                                                                <span className="doc-item__size">{formatFileSize(doc.sizeBytes)}</span>
+                                                                <span className={`doc-item__status doc-item__status--${doc.status}`}>
+                                                                    {doc.status === 'processing' ? '⏳' : doc.status === 'ready' ? '✓' : '✗'}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                <button
+                                                    className="tool-accordion__upload-btn"
+                                                    onClick={() => fileInputRef.current?.click()}
+                                                >
+                                                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span>
+                                                    Upload more files
+                                                </button>
+                                                <input
+                                                    ref={fileInputRef}
+                                                    type="file"
+                                                    accept=".pdf,.txt,.csv,.md,.json"
+                                                    multiple
+                                                    onChange={handleFileUpload}
+                                                    style={{ display: 'none' }}
+                                                />
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 

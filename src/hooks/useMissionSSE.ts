@@ -11,6 +11,8 @@ interface SSECallbacks {
     onError: (data: { message: string }) => void;
     onInterpretationProposal?: (data: InterpretationProposal) => void;
     onInterpretationStatus?: (data: { status: string; message: string }) => void;
+    onDocumentUploaded?: (data: any) => void;
+    onWebSearchResult?: (data: any) => void;
 }
 
 export function useMissionSSE(
@@ -66,6 +68,14 @@ export function useMissionSSE(
 
         eventSource.addEventListener('interpretation-status', (e) => {
             callbacksRef.current.onInterpretationStatus?.(JSON.parse(e.data));
+        });
+
+        eventSource.addEventListener('document-uploaded', (e) => {
+            callbacksRef.current.onDocumentUploaded?.(JSON.parse(e.data));
+        });
+
+        eventSource.addEventListener('web-search-result', (e) => {
+            callbacksRef.current.onWebSearchResult?.(JSON.parse(e.data));
         });
 
         eventSource.onerror = () => {

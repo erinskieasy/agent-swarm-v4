@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 interface MissionSummary {
     id: string;
@@ -8,7 +8,7 @@ interface MissionSummary {
 }
 
 interface MissionInputProps {
-    onSubmit: (goal: string) => void;
+    onSubmit: (goal: string, files: File[]) => void;
     onLoadMission: (id: string) => void;
     isLoading: boolean;
 }
@@ -21,10 +21,20 @@ const STATUS_COLORS: Record<string, string> = {
     idle: 'var(--color-text-dim)',
 };
 
+const ACCEPTED_TYPES = '.pdf,.txt,.csv,.md,.json';
+
+function formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 const MissionInput: React.FC<MissionInputProps> = ({ onSubmit, onLoadMission, isLoading }) => {
     const [goal, setGoal] = useState('');
+    const [files, setFiles] = useState<File[]>([]);
     const [pastMissions, setPastMissions] = useState<MissionSummary[]>([]);
     const [loadingHistory, setLoadingHistory] = useState(true);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         fetch('/api/missions')
@@ -39,8 +49,23 @@ const MissionInput: React.FC<MissionInputProps> = ({ onSubmit, onLoadMission, is
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (goal.trim() && !isLoading) {
-            onSubmit(goal.trim());
+            onSubmit(goal.trim(), files);
         }
+    };
+
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            const newFiles = Array.from(e.target.files);
+            setFiles((prev) => [...prev, ...newFiles]);
+        }
+        // Reset input so selecting the same file again works
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    };
+
+    const removeFile = (index: number) => {
+        setFiles((prev) => prev.filter((_, i) => i !== index));
     };
 
     const formatDate = (dateStr: string) => {
@@ -70,15 +95,56 @@ const MissionInput: React.FC<MissionInputProps> = ({ onSubmit, onLoadMission, is
                 </p>
             </div>
             <form className="mission-input__form" onSubmit={handleSubmit}>
-                <input
-                    className="mission-input__field"
-                    type="text"
-                    placeholder="e.g. Create a marketing strategy for a solar loan program..."
-                    value={goal}
-                    onChange={(e) => setGoal(e.target.value)}
-                    disabled={isLoading}
-                    autoFocus
-                />
+                <div className="mission-input__field-row">
+                    <input
+                        className="mission-input__field"
+                        type="text"
+                        placeholder="e.g. Create a marketing strategy for a solar loan program..."
+                        value={goal}
+                        onChange={(e) => setGoal(e.target.value)}
+                        disabled={isLoading}
+                        autoFocus
+                    />
+                    <button
+                        className="mission-input__attach-btn"
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isLoading}
+                        title="Attach documents"
+                    >
+                        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>attach_file</span>
+                    </button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept={ACCEPTED_TYPES}
+                        multiple
+                        onChange={handleFileSelect}
+                        style={{ display: 'none' }}
+                    />
+                </div>
+
+                {/* File chips */}
+                {files.length > 0 && (
+                    <div className="mission-input__file-chips">
+                        {files.map((file, index) => (
+                            <div key={index} className="file-chip">
+                                <span className="material-symbols-outlined file-chip__icon">description</span>
+                                <span className="file-chip__name">{file.name}</span>
+                                <span className="file-chip__size">{formatFileSize(file.size)}</span>
+                                <button
+                                    className="file-chip__remove"
+                                    type="button"
+                                    onClick={() => removeFile(index)}
+                                    title="Remove file"
+                                >
+                                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 <button
                     className="mission-input__submit"
                     type="submit"

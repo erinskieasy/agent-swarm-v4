@@ -8,6 +8,7 @@ import MissionInput from './components/MissionInput';
 import InterpretationPanel from './components/InterpretationPanel';
 import { useMissionSSE } from './hooks/useMissionSSE';
 import { useElapsedTime } from './hooks/useElapsedTime';
+import type { DocumentInfo, WebSearchSource } from './components/ToolsMemoryPanel';
 
 import type {
     Mission,
@@ -32,6 +33,8 @@ function App() {
     const [interpretationProposal, setInterpretationProposal] = useState<InterpretationProposal | null>(null);
     const [interpretationStatus, setInterpretationStatus] = useState('idle');
     const [interpretationMessage, setInterpretationMessage] = useState('');
+    const [documents, setDocuments] = useState<DocumentInfo[]>([]);
+    const [webSearchSources, setWebSearchSources] = useState<WebSearchSource[]>([]);
     const [isInterpretationLoading, setIsInterpretationLoading] = useState(false);
 
     const isRunning = mission?.status === 'planning' || mission?.status === 'executing' || mission?.status === 'interpreting';
@@ -95,9 +98,28 @@ function App() {
         if (data.status === 'approved') {
             // Interpretation approved — clear proposal, mission will transition to 'planning'
             setInterpretationProposal(null);
+
             setInterpretationStatus('idle');
             setIsInterpretationLoading(false);
         }
+    }, []);
+
+    const handleDocumentUploaded = useCallback((data: DocumentInfo) => {
+        setDocuments((prev) => {
+            const existing = prev.find((d) => d.id === data.id);
+            if (existing) {
+                return prev.map((d) => (d.id === data.id ? { ...d, ...data } : d));
+            }
+            return [...prev, data];
+        });
+    }, []);
+
+    const handleWebSearchResult = useCallback((data: WebSearchSource) => {
+        setWebSearchSources((prev) => {
+            // Dedupe by URL
+            if (prev.some((s) => s.url === data.url)) return prev;
+            return [...prev, data];
+        });
     }, []);
 
     // ─── SSE Connection ─────────────────────────────────────
@@ -111,10 +133,12 @@ function App() {
         onError: handleError,
         onInterpretationProposal: handleInterpretationProposal,
         onInterpretationStatus: handleInterpretationStatus,
+        onDocumentUploaded: handleDocumentUploaded,
+        onWebSearchResult: handleWebSearchResult,
     });
 
     // ─── Launch Mission ──────────────────────────────────────
-    const handleLaunchMission = async (goal: string) => {
+    const handleLaunchMission = async (goal: string, files: File[] = []) => {
         // Reset state
         setAgents([]);
         setSteps([]);
@@ -125,14 +149,21 @@ function App() {
         setInterpretationStatus('idle');
         setInterpretationMessage('');
         setIsInterpretationLoading(false);
+        setDocuments([]);
+        setWebSearchSources([]);
         resetTimer();
         setIsLaunching(true);
 
         try {
+            const formData = new FormData();
+            formData.append('goal', goal);
+            for (const file of files) {
+                formData.append('files', file);
+            }
+
             const response = await fetch('/api/missions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ goal }),
+                body: formData,
             });
 
             if (!response.ok) {
@@ -175,6 +206,8 @@ function App() {
             setReasoningLogs(data.reasoningLogs || []);
             setTools(data.toolsUsed || []);
             setResult(data.results?.[0] || null);
+            setDocuments(data.documents || []);
+            setWebSearchSources([]);
             resetTimer();
         } catch (error) {
             console.error('Failed to load mission:', error);
@@ -195,6 +228,8 @@ function App() {
         setInterpretationStatus('idle');
         setInterpretationMessage('');
         setIsInterpretationLoading(false);
+        setDocuments([]);
+        setWebSearchSources([]);
         resetTimer();
     };
 
@@ -245,6 +280,23 @@ function App() {
         } catch (error) {
             console.error('Failed to submit follow-up:', error);
             setIsInterpretationLoading(false);
+        }
+    };
+
+    // ─── Mid-Mission File Upload ──────────────────────────────
+    const handleUploadMoreFiles = async (files: File[]) => {
+        if (!mission) return;
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append('files', file);
+        }
+        try {
+            await fetch(`/api/missions/${mission.id}/documents`, {
+                method: 'POST',
+                body: formData,
+            });
+        } catch (error) {
+            console.error('Failed to upload more files:', error);
         }
     };
 
@@ -300,6 +352,10 @@ function App() {
                     confidence={confidence}
                     memoryItems={memoryItems}
                     sourceCount={sourceCount}
+                    missionId={mission.id}
+                    documents={documents}
+                    webSearchSources={webSearchSources}
+                    onUploadFiles={handleUploadMoreFiles}
                 />
                 {mission.status === 'interpreting' ? (
                     <InterpretationPanel
