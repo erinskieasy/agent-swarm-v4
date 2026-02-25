@@ -1,6 +1,5 @@
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
-import pdf from 'pdf-parse';
 import { broadcast } from './sse.js';
 
 // ─── Types ───────────────────────────────────────────────────
@@ -29,8 +28,28 @@ export interface ChunkMatch {
 export async function extractText(buffer: Buffer, mimeType: string, filename: string): Promise<string> {
     switch (mimeType) {
         case 'application/pdf': {
-            const data = await pdf(buffer);
-            return data.text;
+            const { Worker } = await import('worker_threads');
+            const { fileURLToPath } = await import('url');
+            const path = await import('path');
+
+            return new Promise((resolve, reject) => {
+                const __filename = fileURLToPath(import.meta.url);
+                const ext = path.extname(__filename);
+                const workerPath = path.resolve(path.dirname(__filename), `pdfWorker${ext}`);
+
+                const worker = new Worker(workerPath, {
+                    workerData: { buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) }
+                });
+
+                worker.on('message', (msg) => {
+                    if (msg.success) resolve(msg.text);
+                    else reject(new Error(msg.error));
+                });
+                worker.on('error', reject);
+                worker.on('exit', (code) => {
+                    if (code !== 0) reject(new Error(`PDF Worker stopped with exit code ${code}`));
+                });
+            });
         }
         case 'text/plain':
         case 'text/markdown':
@@ -79,8 +98,9 @@ export function chunkText(text: string, chunkSize: number = 1500, overlap: numbe
         }
 
         chunks.push(cleanText.slice(start, end).trim());
+        if (end >= cleanText.length) break;
+
         start = end - overlap;
-        if (start >= cleanText.length) break;
     }
 
     return chunks.filter(c => c.length > 0);

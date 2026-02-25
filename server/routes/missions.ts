@@ -109,7 +109,7 @@ router.post('/:id/documents', upload.array('files', 10), async (req, res) => {
         // Process all files in background
         const results = [];
         for (const file of files) {
-            processDocument(id, file).catch((err) => {
+            processDocument(id as string, file).catch((err) => {
                 console.error(`Failed to process file "${file.originalname}" for mission ${id}:`, err);
             });
             results.push({ filename: file.originalname, size: file.size, status: 'processing' });

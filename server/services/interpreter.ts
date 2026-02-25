@@ -5,6 +5,7 @@ import { broadcast } from './sse.js';
 import { runMission } from './orchestrator.js';
 import { researchTopic, shouldResearchFeedback, webSearch } from './tavily.js';
 import type { SearchResult, ResearchFindings } from './tavily.js';
+import { searchDocuments, missionHasDocuments } from './documents.js';
 
 // ─── Interpretation Prompts ──────────────────────────────────
 
@@ -168,17 +169,52 @@ export async function startInterpretation(missionId: string, rawGoal: string): P
         broadcast(missionId, 'interpretation-status', { status: 'analyzing', message: 'Analyzing your request...' });
 
         // Step 1: Interpret
+        const docs = await searchDocuments(missionId, "", 0); // we just need to know if they exist
+        const allDocs = await db.query.missionDocuments.findMany({
+            where: eq(schema.missionDocuments.missionId, missionId)
+        });
+
+        let promptGoal = `User's goal: ${rawGoal}`;
+        if (allDocs.length > 0) {
+            const fileNames = allDocs.map(d => d.filename).join(", ");
+            promptGoal += `\n\n[CONTEXT: The user has attached the following files to this mission: ${fileNames}. Assume the user wants you to use them unless specified otherwise.]`;
+        }
+
         const interpretation = await chatCompletionJSON<InterpretResult>(
             INTERPRET_SYSTEM_PROMPT,
-            `User's goal: ${rawGoal}`
+            promptGoal,
+            'gpt-4o',
+            { missionId },
         );
 
         await addReasoning(missionId, 'Interpreter', 'interpreter',
             `🔍 Initial interpretation complete. Confidence: ${interpretation.confidence}%. Found ${interpretation.weakPoints?.length || 0} weak points.`
         );
 
-        // Step 1.5: Web Research — ground interpretation in reality
-        broadcast(missionId, 'interpretation-status', { status: 'researching', message: 'Researching to ground interpretation in reality...' });
+        // Step 1.5a: Document Search — check uploaded files FIRST
+        let documentContext = '';
+        const hasDocs = await missionHasDocuments(missionId);
+        if (hasDocs) {
+            broadcast(missionId, 'interpretation-status', { status: 'researching', message: 'Searching uploaded documents...' });
+
+            const docQuery = interpretation.interpretation?.objective || rawGoal;
+            const docMatches = await searchDocuments(missionId, docQuery, 8);
+
+            if (docMatches.length > 0) {
+                documentContext = `\n\nUPLOADED DOCUMENT FINDINGS (${docMatches.length} matches):\n${docMatches.map((m, i) => `${i + 1}. [${m.metadata.filename}, chunk #${m.chunkIndex}] (score: ${m.score}):\n${m.content.slice(0, 500)}`).join('\n\n')}`;
+
+                await addReasoning(missionId, 'Researcher', 'researcher',
+                    `📄 Found ${docMatches.length} relevant sections in uploaded documents: ${[...new Set(docMatches.map(m => m.metadata.filename))].join(', ')}`
+                );
+            } else {
+                await addReasoning(missionId, 'Researcher', 'researcher',
+                    `📄 Searched uploaded documents but found no strong keyword matches for the objective. Will supplement with web research.`
+                );
+            }
+        }
+
+        // Step 1.5b: Web Research — supplement with web data
+        broadcast(missionId, 'interpretation-status', { status: 'researching', message: hasDocs ? 'Supplementing with web research...' : 'Researching to ground interpretation in reality...' });
 
         const research = await researchTopic(
             interpretation.interpretation?.objective || rawGoal,
@@ -188,9 +224,11 @@ export async function startInterpretation(missionId: string, rawGoal: string): P
             }
         );
 
-        const researchContext = research.sources.length > 0
+        const webContext = research.sources.length > 0
             ? `\n\nWEB RESEARCH FINDINGS (${research.sources.length} sources):\n${research.sources.map((s, i) => `${i + 1}. [${s.title}](${s.url}): ${s.snippet}`).join('\n')}`
             : '';
+
+        const researchContext = documentContext + webContext;
 
         if (research.sources.length > 0) {
             await addReasoning(missionId, 'Researcher', 'researcher',
@@ -203,7 +241,9 @@ export async function startInterpretation(missionId: string, rawGoal: string): P
         // Step 2: Critique (now informed by research)
         const critique = await chatCompletionJSON<CritiqueResult>(
             CRITIQUE_SYSTEM_PROMPT,
-            `Original goal: ${rawGoal}\n\nInterpretation:\n${JSON.stringify(interpretation, null, 2)}${researchContext}`
+            `Original goal: ${rawGoal}\n\nInterpretation:\n${JSON.stringify(interpretation, null, 2)}${researchContext}`,
+            'gpt-4o',
+            { missionId },
         );
 
         // Merge weak points from both interpret and critique
@@ -226,7 +266,9 @@ export async function startInterpretation(missionId: string, rawGoal: string): P
         // Step 3: Synthesize refined prompt (also informed by research)
         const synthesis = await chatCompletionJSON<SynthesizeResult>(
             SYNTHESIZE_SYSTEM_PROMPT,
-            `Original goal: ${rawGoal}\n\nInterpretation:\n${JSON.stringify(interpretation.interpretation, null, 2)}\n\nCritique:\n${JSON.stringify(critique, null, 2)}${researchContext}`
+            `Original goal: ${rawGoal}\n\nInterpretation:\n${JSON.stringify(interpretation.interpretation, null, 2)}\n\nCritique:\n${JSON.stringify(critique, null, 2)}${researchContext}`,
+            'gpt-4o',
+            { missionId },
         );
 
         await addReasoning(missionId, 'Synthesizer', 'synthesizer',
@@ -310,8 +352,24 @@ ${JSON.stringify((prevProposal as any).clarifyingQuestions || [], null, 2)}
 PREVIOUS CONFIDENCE: ${prevProposal.confidence}%
 
 USER'S FEEDBACK (treat as authoritative — this resolves ambiguity):
-${userFeedback}`
+${userFeedback}`,
+            'gpt-4o',
+            { missionId },
         );
+
+        // Search uploaded documents for feedback-relevant content
+        let documentContext = '';
+        const hasDocs = await missionHasDocuments(missionId);
+        if (hasDocs) {
+            const docMatches = await searchDocuments(missionId, userFeedback, 5);
+            if (docMatches.length > 0) {
+                documentContext = `\n\nUPLOADED DOCUMENT FINDINGS (${docMatches.length} matches for feedback):\n${docMatches.map((m, i) => `${i + 1}. [${m.metadata.filename}, chunk #${m.chunkIndex}]:\n${m.content.slice(0, 500)}`).join('\n\n')}`;
+
+                await addReasoning(missionId, 'Researcher', 'researcher',
+                    `📄 Found ${docMatches.length} relevant sections in uploaded documents related to feedback.`
+                );
+            }
+        }
 
         // Step 1.5: Smart research trigger — only if feedback introduces new topics
         let researchSources: SearchResult[] = (prevProposal.researchSources as SearchResult[]) || [];
@@ -348,10 +406,12 @@ ${userFeedback}`
                 );
             }
 
-            researchContext = `\n\nWEB RESEARCH FINDINGS (${researchSources.length} total sources):\n${researchSources.map((s, i) => `${i + 1}. [${s.title}](${s.url}): ${s.snippet}`).join('\n')}`;
+            researchContext = documentContext + `\n\nWEB RESEARCH FINDINGS (${researchSources.length} total sources):\n${researchSources.map((s, i) => `${i + 1}. [${s.title}](${s.url}): ${s.snippet}`).join('\n')}`;
         } else if (researchSources.length > 0) {
             // Carry forward previous research for context
-            researchContext = `\n\nPREVIOUS RESEARCH (${researchSources.length} sources):\n${researchSources.map((s, i) => `${i + 1}. [${s.title}](${s.url}): ${s.snippet}`).join('\n')}`;
+            researchContext = documentContext + `\n\nPREVIOUS RESEARCH (${researchSources.length} sources):\n${researchSources.map((s, i) => `${i + 1}. [${s.title}](${s.url}): ${s.snippet}`).join('\n')}`;
+        } else if (documentContext) {
+            researchContext = documentContext;
         }
 
         broadcast(missionId, 'interpretation-status', { status: 'critiquing', message: 'Checking if feedback was properly incorporated...' });
@@ -369,7 +429,9 @@ ${JSON.stringify(prevProposal.interpretation, null, 2)}
 UPDATED INTERPRETATION:
 ${JSON.stringify(interpretation.interpretation, null, 2)}
 
-Did the revision properly incorporate the user's feedback?${researchContext}`
+Did the revision properly incorporate the user's feedback?${researchContext}`,
+            'gpt-4o',
+            { missionId },
         );
 
         // Only include genuinely NEW weak points
@@ -397,7 +459,9 @@ ${JSON.stringify(interpretation.interpretation, null, 2)}
 Critique:
 ${JSON.stringify(critique, null, 2)}${researchContext}
 
-IMPORTANT: Build upon the previous refined goal — incorporate the user's feedback as updates, don't rewrite from scratch.`
+IMPORTANT: Build upon the previous refined goal — incorporate the user's feedback as updates, don't rewrite from scratch.`,
+            'gpt-4o',
+            { missionId },
         );
 
         await addReasoning(missionId, 'Synthesizer', 'synthesizer',

@@ -302,7 +302,7 @@ export async function runMission(missionId: string, goal: string): Promise<void>
                 let lastError = '';
                 for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
                     try {
-                        const result = await chatCompletion(enrichedPrompt, goal);
+                        const result = await chatCompletion(enrichedPrompt, goal, 'gpt-4o', { missionId });
 
                         // Check for suspiciously short output
                         if (result.length < 50) {
@@ -374,7 +374,7 @@ Maintain the best insights from each contribution. Format with clear sections, h
 Do NOT mention that you are combining outputs — present it as one unified response.`;
         const mergeUserMessage = `Original Goal: ${goal}\n\n${agentResults.map((r, i) => `--- ${r.agentName} (${r.role}) Output ---\n${r.result}`).join('\n\n')}`;
 
-        const mergedContent = await chatCompletion(mergeSystemPrompt, mergeUserMessage);
+        const mergedContent = await chatCompletion(mergeSystemPrompt, mergeUserMessage, 'gpt-4o', { missionId });
 
         // Broadcast merge/synthesizer's full prompt for transparency
         broadcast(missionId, 'agent-update', {
@@ -395,7 +395,9 @@ Do NOT mention that you are combining outputs — present it as one unified resp
         // Create reasoning summary
         const reasoningSummary = await chatCompletion(
             'Summarize the reasoning process in 2-3 sentences. Explain how the agents collaborated.',
-            `Goal: ${goal}\nAgents used: ${agentRecords.map(a => a.agent.name).join(', ')}\nPlan reasoning: ${plan.reasoning}`
+            `Goal: ${goal}\nAgents used: ${agentRecords.map(a => a.agent.name).join(', ')}\nPlan reasoning: ${plan.reasoning}`,
+            'gpt-4o',
+            { missionId },
         );
 
         // Store final result

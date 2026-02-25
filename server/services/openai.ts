@@ -1,8 +1,8 @@
 import OpenAI from 'openai';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/chat/completions';
 import 'dotenv/config';
-import { webSearch } from './tavily.js';
-import { searchDocuments, missionHasDocuments } from './documents.js';
+import { missionHasDocuments } from './documents.js';
+import { getToolDefinitions, executeTool } from '../tools/index.js';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -26,58 +26,7 @@ function getDateContext(hasDocuments: boolean): string {
     return `\n\nCurrent date: ${formatted}. ${tools}`;
 }
 
-/**
- * Web search tool definition for OpenAI function calling.
- */
-const WEB_SEARCH_TOOL: ChatCompletionTool = {
-    type: 'function',
-    function: {
-        name: 'web_search',
-        description: 'Search the web for current, real-world information. Use when you need up-to-date data, pricing, market info, technical docs, or anything beyond your training data.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: {
-                    type: 'string',
-                    description: 'The search query. Be specific and concise.',
-                },
-            },
-            required: ['query'],
-        },
-    },
-};
-
-/**
- * File search tool definition for OpenAI function calling.
- */
-const FILE_SEARCH_TOOL: ChatCompletionTool = {
-    type: 'function',
-    function: {
-        name: 'file_search',
-        description: 'Search the user\'s uploaded documents for specific information. Use when the user has provided files and you need to find data, quotes, statistics, or facts from their documents.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: {
-                    type: 'string',
-                    description: 'What to search for in the uploaded documents. Be specific.',
-                },
-            },
-            required: ['query'],
-        },
-    },
-};
-
-/**
- * Build the tools array based on whether the mission has documents.
- */
-function getTools(hasDocuments: boolean): ChatCompletionTool[] {
-    const tools = [WEB_SEARCH_TOOL];
-    if (hasDocuments) {
-        tools.push(FILE_SEARCH_TOOL);
-    }
-    return tools;
-}
+// Tool definitions are now managed in the tools module.
 
 /**
  * Process any tool calls in the response by executing searches
@@ -105,51 +54,20 @@ async function handleToolCalls(
         // Add the assistant's tool-call message to history
         currentMessages.push(choice.message as ChatCompletionMessageParam);
 
-        // Execute each tool call
+        // Execute each tool call using the tools module
         for (const toolCall of choice.message.tool_calls) {
-            if (toolCall.function.name === 'web_search') {
-                try {
-                    const args = JSON.parse(toolCall.function.arguments);
-                    const results = await webSearch(args.query, { maxResults: 4 });
-                    const resultText = results.length > 0
-                        ? results.map((r, i) => `${i + 1}. **${r.title}** (${r.url})\n   ${r.snippet}`).join('\n\n')
-                        : 'No relevant results found.';
+            const hasDocs = tools.some(t => t.function.name === 'file_search');
+            const resultText = await executeTool(
+                toolCall.function.name,
+                toolCall.function.arguments,
+                { missionId, hasDocuments: hasDocs }
+            );
 
-                    currentMessages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: resultText,
-                    });
-                } catch (err: any) {
-                    currentMessages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: `Search failed: ${err.message}`,
-                    });
-                }
-            } else if (toolCall.function.name === 'file_search' && missionId) {
-                try {
-                    const args = JSON.parse(toolCall.function.arguments);
-                    const chunks = await searchDocuments(missionId, args.query, 5);
-                    const resultText = chunks.length > 0
-                        ? chunks.map((c, i) =>
-                            `--- Match ${i + 1} (from "${c.metadata.filename}", chunk #${c.chunkIndex}, score: ${c.score}) ---\n${c.content}`
-                        ).join('\n\n')
-                        : 'No matching content found in the uploaded documents.';
-
-                    currentMessages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: resultText,
-                    });
-                } catch (err: any) {
-                    currentMessages.push({
-                        role: 'tool',
-                        tool_call_id: toolCall.id,
-                        content: `File search failed: ${err.message}`,
-                    });
-                }
-            }
+            currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: resultText,
+            });
         }
 
         // Get the next response with tool results
@@ -179,7 +97,7 @@ export async function chatCompletion(
 ): Promise<string> {
     const missionId = options?.missionId;
     const hasDocuments = missionId ? await missionHasDocuments(missionId) : false;
-    const tools = getTools(hasDocuments);
+    const tools = getToolDefinitions({ missionId, hasDocuments });
 
     const messages: ChatCompletionMessageParam[] = [
         { role: 'system', content: systemPrompt + getDateContext(hasDocuments) },
@@ -214,7 +132,7 @@ export async function chatCompletionJSON<T>(
 ): Promise<T> {
     const missionId = options?.missionId;
     const hasDocuments = missionId ? await missionHasDocuments(missionId) : false;
-    const tools = getTools(hasDocuments);
+    const tools = getToolDefinitions({ missionId, hasDocuments });
 
     const messages: ChatCompletionMessageParam[] = [
         { role: 'system', content: systemPrompt + getDateContext(hasDocuments) },
